@@ -1,0 +1,73 @@
+[project]
+name = "agentic-stock-research"
+version = "0.1.0"
+description = "Agentic AI for stock research using LangGraph, FastAPI, and async Python."
+requires-python = ">=3.11"
+authors = [
+  { name = "EquiSense AI" }
+]
+readme = "README.md"
+keywords = ["stocks", "langgraph", "fastapi", "asyncio", "nlp", "pandas"]
+
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "httpx>=0.27",
+  "pandas>=2.1",
+  "pandas-ta>=0.3.14b0",
+  "langchain>=0.2",
+  "langgraph>=0.1.13",
+  "langfuse>=2.0",
+  "beautifulsoup4>=4.12",
+  "playwright>=1.45",
+  "yfinance>=0.2.40",
+  "SQLAlchemy[asyncio]>=2.0",
+  "aiosqlite>=0.20",
+  "redis>=5.0",
+  "structlog>=24.1",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.4",
+  "python-dotenv>=1.0",
+  "typing-extensions>=4.9",
+  "orjson>=3.9",
+  "transformers>=4.41",
+  "sentence-transformers>=3.0",
+  "yt-dlp>=2024.4.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black>=24.4",
+  "isort>=5.13",
+  "flake8>=7.0",
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-q"
+asyncio_mode = "auto"

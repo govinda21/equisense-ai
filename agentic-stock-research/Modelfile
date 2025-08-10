@@ -1,0 +1,3 @@
+FROM ./fin-llama-33b.Q4_K_M.gguf
+PARAMETER num_ctx 4096
+# minimal template; API /api/generate will write full prompt

@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+/* App scopes */
+html, body, #root { height: 100%; }
+body { @apply bg-slate-50 text-slate-900; }
+.container { @apply mx-auto max-w-6xl px-4; }
+.card { @apply bg-white rounded-xl shadow-sm ring-1 ring-slate-200; }
+.btn-primary { @apply inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors; }
+.input { @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors; }
+.label { @apply block text-sm font-medium text-slate-700 mb-1; }
+.badge { @apply inline-flex items-center rounded-md px-2 py-1 text-xs font-medium; }
+.badge-buy { @apply bg-green-100 text-green-800; }
+.badge-hold { @apply bg-amber-100 text-amber-800; }
+.badge-sell { @apply bg-rose-100 text-rose-800; }
+.skeleton { @apply animate-pulse bg-slate-200 rounded; }
+
+/* Dark mode enhancements */
+.dark body { @apply bg-slate-900 text-slate-100; }
+.dark .card { @apply bg-slate-800 ring-slate-700; }
+.dark .input { @apply bg-slate-800 border-slate-600 text-slate-100; }
+.dark .label { @apply text-slate-300; }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { @apply bg-slate-100 dark:bg-slate-800; }
+::-webkit-scrollbar-thumb { @apply bg-slate-300 dark:bg-slate-600 rounded-full; }
+::-webkit-scrollbar-thumb:hover { @apply bg-slate-400 dark:bg-slate-500; }
+
+/* Smooth animations */
+* { transition-property: color, background-color, border-color, text-decoration-color, fill, stroke; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }

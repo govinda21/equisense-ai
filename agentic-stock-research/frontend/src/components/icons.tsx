@@ -1,0 +1,25 @@
+import { 
+  StarIcon, 
+  PresentationChartLineIcon, 
+  ChartBarIcon, 
+  BanknotesIcon, 
+  ChatBubbleLeftRightIcon,
+  ArrowTrendingUpIcon,
+  ChatBubbleOvalLeftIcon,
+  UserIcon,
+  PaperAirplaneIcon,
+  ComputerDesktopIcon
+} from '@heroicons/react/24/outline'
+
+export const Icons = {
+  Star: StarIcon,
+  Technical: PresentationChartLineIcon,
+  Fundamentals: ChartBarIcon,
+  Cashflow: BanknotesIcon,
+  Sentiment: ChatBubbleLeftRightIcon,
+  TrendingUp: ArrowTrendingUpIcon,
+  MessageCircle: ChatBubbleOvalLeftIcon,
+  User: UserIcon,
+  Send: PaperAirplaneIcon,
+  Bot: ComputerDesktopIcon,
+}

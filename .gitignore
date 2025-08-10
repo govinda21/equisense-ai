@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.cache/
+.playwright/
+.pytest_cache/
+.coverage
+htmlcov/
+.dist/
+.eggs/
+build/
+dist/
+*.egg-info/
+node_modules/
+reports/
+docs/graph_diagram.png
