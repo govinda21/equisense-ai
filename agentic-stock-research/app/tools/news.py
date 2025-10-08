@@ -201,8 +201,10 @@ async def fetch_real_news(ticker: str, max_articles: int = 5) -> List[Dict[str, 
     else:
         logger.debug(f"Successfully found {len(articles)} articles for {ticker}")
     
-    # Standardize article format
+    # Standardize article format and filter for ticker relevance
     standardized_articles = []
+    filtered_out = 0
+    
     for article in articles:
         try:
             standardized_article = {
@@ -214,14 +216,90 @@ async def fetch_real_news(ticker: str, max_articles: int = 5) -> List[Dict[str, 
                 'raw': article  # Keep original for debugging
             }
             
-            # Only include articles with meaningful content
-            if standardized_article['title'] and len(standardized_article['title']) > 10:
+            # Only include articles with meaningful content and ticker relevance
+            if (standardized_article['title'] and 
+                len(standardized_article['title']) > 10 and
+                _is_ticker_relevant(standardized_article, ticker)):
                 standardized_articles.append(standardized_article)
+            else:
+                filtered_out += 1
+                logger.debug(f"Filtered out irrelevant article for {ticker}: {standardized_article['title']}")
                 
         except Exception:
             continue
     
+    logger.info(f"Filtered news for {ticker}: {len(standardized_articles)} relevant, {filtered_out} filtered out")
     return standardized_articles[:max_articles]
+
+
+def _is_ticker_relevant(article: Dict[str, Any], ticker: str) -> bool:
+    """
+    Check if an article is relevant to the specific ticker.
+    Business logic: For major stocks, be more inclusive to capture relevant market sentiment.
+    """
+    title = article.get('title', '').lower()
+    summary = article.get('summary', '').lower()
+    
+    # Get company name and common references for major tickers
+    ticker_base = ticker.split('.')[0].upper()  # Remove .NS, .L suffixes
+    
+    # Common ticker mappings to company names
+    ticker_keywords = {
+        'AAPL': ['apple', 'iphone', 'ipad', 'mac', 'tim cook', 'cupertino'],
+        'MSFT': ['microsoft', 'windows', 'azure', 'office', 'satya nadella'],
+        'GOOGL': ['google', 'alphabet', 'search', 'android', 'youtube', 'pichai'],
+        'AMZN': ['amazon', 'aws', 'prime', 'bezos', 'andy jassy'],
+        'TSLA': ['tesla', 'elon musk', 'electric vehicle', 'model', 'cybertruck'],
+        'META': ['meta', 'facebook', 'instagram', 'whatsapp', 'mark zuckerberg'],
+        'NVDA': ['nvidia', 'gpu', 'ai chip', 'jensen huang', 'graphics'],
+        'NFLX': ['netflix', 'streaming', 'reed hastings'],
+        'RELIANCE': ['reliance', 'jio', 'mukesh ambani', 'ril'],
+    }
+    
+    # Major stocks that are commonly included in market discussions
+    major_tickers = {'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX'}
+    
+    # Get keywords for this ticker
+    keywords = ticker_keywords.get(ticker_base, [ticker_base.lower()])
+    keywords.append(ticker_base.lower())  # Always include the ticker itself
+    
+    # Check if any keyword appears in title or summary
+    text_to_check = f"{title} {summary}"
+    
+    # Direct ticker mention is strongest signal
+    if ticker_base.lower() in text_to_check:
+        return True
+    
+    # Check for company-specific keywords
+    keyword_matches = sum(1 for keyword in keywords if keyword in text_to_check)
+    
+    if keyword_matches > 0:
+        return True
+    
+    # For major stocks, be more inclusive - they're often discussed in broader market context
+    if ticker_base in major_tickers:
+        # Tech/growth stock related terms likely include major tech stocks
+        inclusive_terms = [
+            'growth stocks', 'tech stocks', 'magnificent seven', 'titans', 'top stocks',
+            'leading stocks', 'mega cap', 'big tech', 'faang', 'technology sector',
+            'growth companies', 'top performers', 'market leaders', 'blue chip'
+        ]
+        
+        inclusive_matches = sum(1 for term in inclusive_terms if term in text_to_check)
+        
+        if inclusive_matches > 0:
+            # Still filter out clearly irrelevant news (specific to other companies)
+            exclusion_terms = [
+                'intel corp', 'trump intel', 'altman openai', 'unitedhealth berkshire',
+                'applied materials', 'quantum computing specific'
+            ]
+            
+            exclusion_matches = sum(1 for term in exclusion_terms if term in text_to_check)
+            
+            if exclusion_matches == 0:
+                return True
+    
+    return False
 
 
 def _deduplicate_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -19,8 +19,17 @@ def _ollama_chat(prompt: str) -> str:
         return ""
     try:
         u = urlparse(settings.ollama_base_url)
-        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=30)
-        body = json.dumps({"model": settings.ollama_model, "prompt": prompt, "stream": False})
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=60)
+        body = json.dumps({
+            "model": settings.ollama_model, 
+            "prompt": prompt, 
+            "stream": False,
+            "options": {
+                "num_predict": 1000,  # Limit response length
+                "temperature": 0.1,   # More deterministic
+                "top_p": 0.9
+            }
+        })
         conn.request("POST", "/api/generate", body, headers={"Content-Type": "application/json"})
         resp = conn.getresponse()
         if resp.status != 200:
@@ -54,7 +63,7 @@ async def summarize_texts(texts: List[str], max_words: int = 120) -> str:
     import asyncio
     res = await asyncio.to_thread(
         _ollama_chat,
-        "Summarize the following bullet list of finance headlines in one paragraph (neutral tone):\n- "
+        "Summarize the following bullet list of finance headlines in one paragraph, reflecting the overall sentiment:\n- "
         + "\n- ".join(texts),
     )
     if res:

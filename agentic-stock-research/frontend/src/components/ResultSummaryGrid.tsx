@@ -27,25 +27,7 @@ function formatAmountByCurrency(value?: number, ticker?: string): string {
   return `${symbol}${v.toLocaleString()}`
 }
 
-function Stars({ value = 0 }: { value?: number }) {
-  const numValue = Number(value) || 0
-  const full = Math.floor(numValue)  // Use floor instead of round
-  const hasHalf = numValue % 1 >= 0.5
-  
-  return (
-    <div className="flex items-center gap-1" aria-label={`Rating ${value} out of 5`}>
-      {Array.from({ length: 5 }, (_, i) => {
-        if (i < full) {
-          return <span key={i} className="text-yellow-500">★</span>;
-        } else if (i === full && hasHalf) {
-          return <span key={i} className="text-yellow-400">⭐</span>;
-        } else {
-          return <span key={i} className="text-slate-300">★</span>;
-        }
-      })}
-    </div>
-  )
-}
+// Stars component not currently used; kept for future nuanced star rendering
 
 function formatPct(value?: number, digits: number = 1): string {
   if (value === undefined || value === null || isNaN(Number(value))) return '—'
@@ -63,6 +45,29 @@ export function ResultSummaryGrid({ report }: { report: any }) {
   const ticker: string | undefined = report?.ticker
   const signals = report?.technicals?.details?.signals
   const indicators = report?.technicals?.details?.indicators
+  const comp = report?.comprehensive_fundamentals
+  // Build a client-side fallback executive summary if backend is missing it
+  const execSummary: string | undefined = (() => {
+    if (report?.executive_summary) return report.executive_summary
+    try {
+      const action = report?.decision?.action || 'Hold'
+      const score = Number(report?.decision?.rating || 0)
+      const scorePct = Math.round((score / 5) * 100)
+      const iv = comp?.intrinsic_value
+      const mos = comp?.margin_of_safety
+      const positives: string[] = report?.decision?.top_reasons_for || []
+      const negatives: string[] = report?.decision?.top_reasons_against || []
+      const parts: string[] = []
+      parts.push(`${action}: ${scorePct}`)
+      if (typeof iv === 'number') parts.push(`IV ${formatAmountByCurrency(iv, ticker)}`)
+      if (typeof mos === 'number') parts.push(`MoS ${(mos * 100).toFixed(0)}%`)
+      if (positives.length) parts.push(`Key: ${positives.slice(0, 2).join(', ')}`)
+      if (negatives.length) parts.push(`Risks: ${negatives.slice(0, 2).join(', ')}`)
+      return parts.join('; ')
+    } catch {
+      return undefined
+    }
+  })()
   return (
     <div className="grid md:grid-cols-2 gap-6">
       <div className="card p-5">
@@ -70,11 +75,159 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           <h3 className="text-lg font-medium">Recommendation & Rating</h3>
           <Icons.Star className="w-5 h-5 text-slate-500" aria-hidden />
         </div>
-        <div className="flex items-center gap-4">
-          <span className="text-2xl font-semibold">{report?.decision?.action}</span>
-          <Stars value={report?.decision?.rating} />
+        {execSummary && (
+          <div className="mb-3 text-sm text-slate-800 bg-slate-50 border rounded p-3">
+            <strong>Executive Summary:</strong> {execSummary}
+          </div>
+        )}
+        <div className="space-y-3">
+          {/* Clean single-line recommendation format */}
+          <div className="text-lg font-medium text-slate-900">
+            {report?.decision?.action} — {report?.decision?.rating}/5 {(() => {
+              const rating = report?.decision?.rating || 0;
+              const fullStars = Math.floor(rating);
+              const hasHalf = (rating - fullStars) >= 0.5;
+              let stars = "★".repeat(fullStars);
+              if (hasHalf && fullStars < 5) stars += "☆";
+              stars += "☆".repeat(5 - stars.length);
+              return stars;
+            })()}
+          </div>
+          
+          {/* Professional rationale */}
+          <div className="text-sm text-slate-700 leading-relaxed">
+            <strong className="text-slate-900">Rationale:</strong> {(() => {
+              // Generate professional rationale from available data
+              const action = report?.decision?.action || "Hold";
+              const positives = report?.decision?.top_reasons_for || [];
+              const negatives = report?.decision?.top_reasons_against || [];
+              
+              if (action === "Hold") {
+                return `The stock demonstrates stable performance with balanced risks and opportunities${positives.length > 0 ? `, supported by ${positives[0].toLowerCase()}` : ''}${negatives.length > 0 ? ` while monitoring ${negatives[0].toLowerCase()}` : ''}. No strong short-term catalysts identified.`;
+              } else if (action === "Buy" || action === "Strong Buy") {
+                return `Strong fundamentals and positive market dynamics support upward potential${positives.length > 0 ? `, particularly ${positives[0].toLowerCase()}` : ''}. Investment thesis remains compelling despite ${negatives.length > 0 ? negatives[0].toLowerCase() : 'market volatility'}.`;
+              } else {
+                return `Current market conditions and risk factors suggest caution${negatives.length > 0 ? `, primarily due to ${negatives[0].toLowerCase()}` : ''}. Consider defensive positioning until outlook improves.`;
+              }
+            })()}
+          </div>
         </div>
       </div>
+
+      {comp && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-lg font-medium">Comprehensive Fundamentals (DCF & Scoring)</h3>
+            <Icons.Fundamentals className="w-5 h-5 text-slate-500" aria-hidden />
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <div className="text-slate-500">Overall Score</div>
+              <div className="font-medium">{formatNumber(comp.overall_score, 1)} / 100</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Grade</div>
+              <div className="font-medium">{comp.overall_grade ?? '—'}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Intrinsic Value (DCF)</div>
+              <div className="font-medium">{formatAmountByCurrency(comp.intrinsic_value, ticker)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Margin of Safety</div>
+              <div className="font-medium">{formatPct(comp.margin_of_safety, 1)}</div>
+            </div>
+            <div>
+            <div className="text-slate-500">Upside Potential</div>
+              <div className="font-medium">{(() => {
+                const v = typeof comp.upside_potential === 'number' ? comp.upside_potential : (typeof comp.margin_of_safety === 'number' ? comp.margin_of_safety : undefined)
+                return formatPct(v, 1)
+              })()}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Buy Zone</div>
+              <div className="font-medium">{`${formatAmountByCurrency(comp.entry_zone_low, ticker)} – ${formatAmountByCurrency(comp.entry_zone_high, ticker)}`}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Target Price</div>
+              <div className="font-medium">{formatAmountByCurrency(comp.target_price, ticker)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Stop Loss</div>
+              <div className="font-medium">{formatAmountByCurrency(comp.stop_loss, ticker)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Time Horizon</div>
+              <div className="font-medium">{comp.time_horizon_months ? `${comp.time_horizon_months} months` : '—'}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Risk Rating</div>
+              <div className="font-medium">{comp.risk_rating ?? '—'}</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-5 gap-2 mt-4 text-xs">
+            <div>
+              <div className="text-slate-500">Financial</div>
+              <div className="font-medium">{formatNumber(comp.financial_health_score, 0)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Valuation</div>
+              <div className="font-medium">{formatNumber(comp.valuation_score, 0)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Growth</div>
+              <div className="font-medium">{formatNumber(comp.growth_prospects_score, 0)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Governance</div>
+              <div className="font-medium">{formatNumber(comp.governance_score, 0)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Macro</div>
+              <div className="font-medium">{formatNumber(comp.macro_sensitivity_score, 0)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {comp && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-lg font-medium">Governance & Red Flags</h3>
+            <Icons.Fundamentals className="w-5 h-5 text-slate-500" aria-hidden />
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <div className="text-slate-500">Governance Score</div>
+              <div className="font-medium">{formatNumber(comp.governance_score, 0)}</div>
+            </div>
+            <div>
+              <div className="text-slate-500">Risk Rating</div>
+              <div className="font-medium">{comp.risk_rating || '—'}</div>
+            </div>
+          </div>
+          {(comp.key_risks?.length || comp.key_catalysts?.length) && (
+            <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
+              {comp.key_risks?.length > 0 && (
+                <div>
+                  <div className="text-slate-500">Top Risks</div>
+                  <div className="font-medium text-red-600">
+                    {comp.key_risks.slice(0, 3).join(', ')}
+                  </div>
+                </div>
+              )}
+              {comp.key_catalysts?.length > 0 && (
+                <div>
+                  <div className="text-slate-500">Catalysts</div>
+                  <div className="font-medium text-green-600">
+                    {comp.key_catalysts.slice(0, 3).join(', ')}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card p-5">
         <div className="flex items-center justify-between mb-2">
@@ -325,28 +478,71 @@ export function ResultSummaryGrid({ report }: { report: any }) {
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div>
             <div className="text-slate-500 flex items-center gap-2">
-              News
+              News Sentiment
               {report?.news_sentiment?.latest_date && (
                 <span className="text-xs text-slate-400">
                   ({new Date(report.news_sentiment.latest_date).toLocaleDateString()})
                 </span>
               )}
             </div>
-            <div className="font-medium">{report?.news_sentiment?.summary || '—'}</div>
-            {report?.news_sentiment?.headlines && report.news_sentiment.headlines.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {report.news_sentiment.headlines.slice(0, 2).map((headline: string, idx: number) => (
-                  <div key={idx} className="text-xs text-slate-600 line-clamp-2">
-                    • {headline}
+            <div className="font-medium text-sm mb-2">
+              {report?.news_sentiment?.details?.professional_sentiment || 
+               report?.news_sentiment?.professional_sentiment || '—'}
+            </div>
+            {(() => {
+              const headlineAnalyses = report?.news_sentiment?.details?.headline_analyses || 
+                                     report?.news_sentiment?.headline_analyses || [];
+              const headlines = report?.news_sentiment?.details?.headlines || 
+                              report?.news_sentiment?.headlines || [];
+              const articleCount = report?.news_sentiment?.details?.article_count ?? 
+                                 report?.news_sentiment?.article_count ?? 0;
+              
+              // Show professional format if available, otherwise fallback to basic format
+              if (headlineAnalyses && headlineAnalyses.length > 0) {
+                return (
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium text-slate-600 mb-1">Headlines:</div>
+                    {headlineAnalyses.slice(0, 2).map((analysis: any, idx: number) => (
+                      <div key={idx} className="text-xs text-slate-600">
+                        <div className="line-clamp-1 mb-1">• {analysis.headline}</div>
+                        <div className="text-slate-500 ml-2">
+                          <span className={`font-medium ${
+                            analysis.sentiment === 'Positive' ? 'text-green-600' : 
+                            analysis.sentiment === 'Negative' ? 'text-red-600' : 
+                            'text-slate-600'
+                          }`}>
+                            {analysis.sentiment}
+                          </span>
+                          : {analysis.rationale}
+                        </div>
+                      </div>
+                    ))}
+                    {articleCount > 2 && (
+                      <div className="text-xs text-blue-600 mt-1">
+                        +{articleCount - 2} more articles
+                      </div>
+                    )}
                   </div>
-                ))}
-                {report.news_sentiment.article_count > 2 && (
-                  <div className="text-xs text-blue-600">
-                    +{report.news_sentiment.article_count - 2} more articles
+                );
+              } else if (headlines && headlines.length > 0) {
+                // Fallback to simple format
+                return (
+                  <div className="mt-2 space-y-1">
+                    {headlines.slice(0, 2).map((headline: string, idx: number) => (
+                      <div key={idx} className="text-xs text-slate-600 line-clamp-2">
+                        • {headline}
+                      </div>
+                    ))}
+                    {articleCount > 2 && (
+                      <div className="text-xs text-blue-600">
+                        +{articleCount - 2} more articles
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            )}
+                );
+              }
+              return null;
+            })()}
           </div>
           <div>
             <div className="text-slate-500">YouTube</div>

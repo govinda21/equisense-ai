@@ -76,7 +76,8 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_startup() -> None:
-        dist_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+        # Serve production build if available (frontend lives under agentic-stock-research/frontend)
+        dist_dir = Path(__file__).resolve().parents[1] / "frontend" / "dist"
         if dist_dir.exists():
             app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="static")
             logger.info("frontend_mounted", path=str(dist_dir))

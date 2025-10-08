@@ -17,6 +17,7 @@ from app.graph.nodes.news_sentiment import news_sentiment_node
 from app.graph.nodes.youtube_analysis import youtube_analysis_node
 from app.graph.nodes.technicals import technicals_node
 from app.graph.nodes.fundamentals import fundamentals_node
+from app.graph.nodes.comprehensive_fundamentals import comprehensive_fundamentals_node
 from app.graph.nodes.peer_analysis import peer_analysis_node
 from app.graph.nodes.analyst_recommendations import analyst_recommendations_node
 from app.graph.nodes.cashflow import cashflow_node
@@ -25,6 +26,7 @@ from app.graph.nodes.sector_macro import sector_macro_node
 from app.graph.nodes.growth_prospects import growth_prospects_node
 from app.graph.nodes.valuation import valuation_node
 from app.graph.nodes.synthesis import synthesis_node
+from app.graph.nodes.synthesis_multi import enhanced_synthesis_node
 
 
 def _wrap(node_fn: Callable[[ResearchState, AppSettings], Any], settings: AppSettings):
@@ -43,6 +45,7 @@ def build_research_graph(settings: AppSettings):
     graph.add_node("youtube", _wrap(youtube_analysis_node, settings))
     graph.add_node("technicals", _wrap(technicals_node, settings))
     graph.add_node("fundamentals", _wrap(fundamentals_node, settings))
+    graph.add_node("comprehensive_fundamentals", _wrap(comprehensive_fundamentals_node, settings))
     graph.add_node("peer_analysis", _wrap(peer_analysis_node, settings))
     graph.add_node("analyst_recommendations", _wrap(analyst_recommendations_node, settings))
     graph.add_node("cashflow", _wrap(cashflow_node, settings))
@@ -50,6 +53,7 @@ def build_research_graph(settings: AppSettings):
     graph.add_node("sector_macro", _wrap(sector_macro_node, settings))
     graph.add_node("growth_prospects", _wrap(growth_prospects_node, settings))
     graph.add_node("valuation", _wrap(valuation_node, settings))
+    # Use simple synthesis (enhanced version has data explosion bug)
     graph.add_node("synthesis", _wrap(synthesis_node, settings))
 
     graph.set_entry_point("start")
@@ -59,8 +63,11 @@ def build_research_graph(settings: AppSettings):
     graph.add_edge("data_collection", "news_sentiment")
     graph.add_edge("data_collection", "youtube")
     
-    # New integration: peer_analysis after fundamentals but before cashflow
-    graph.add_edge("fundamentals", "peer_analysis")
+    # Enhanced fundamentals analysis after basic fundamentals
+    graph.add_edge("fundamentals", "comprehensive_fundamentals")
+    
+    # New integration: peer_analysis after comprehensive fundamentals but before cashflow
+    graph.add_edge("comprehensive_fundamentals", "peer_analysis")
     
     # New integration: analyst_recommendations after peer_analysis
     graph.add_edge("peer_analysis", "analyst_recommendations")

@@ -16,10 +16,11 @@
 
 ### 1. Backend Setup
 ```bash
-# Navigate to project root
-cd /Users/govindak/workspace/EquiSense_AI
+# Navigate to project root (replace with your actual path)
+cd /path/to/your/EquiSense_AI
 
-# Create and activate virtual environment (use the existing one)
+# Create and activate virtual environment
+python3 -m venv .venv
 source .venv/bin/activate
 
 # Upgrade pip and install dependencies
@@ -30,16 +31,19 @@ pip install -e '.[dev]'
 python -m playwright install --with-deps chromium
 ```
 
+### 1.1 Optional: Financial NLP (Temporarily disabled)
+Financial-domain Transformer integration is currently disabled. We'll re-introduce a configurable NLP model after evaluation.
+
 ### 2. Frontend Setup
 ```bash
-# Navigate to frontend directory
+# Navigate to frontend directory (from project root)
 cd agentic-stock-research/frontend
 
 # Install dependencies
 npm ci
 
-# Create environment file (if it doesn't exist)
-cp .env.example .env 2>/dev/null || echo "VITE_API_BASE_URL=http://localhost:8000" > .env
+# Create environment file
+echo "VITE_API_BASE_URL=http://localhost:8000" > .env
 ```
 
 ### 3. AI Model Setup
@@ -53,42 +57,54 @@ ollama list | grep gemma3
 
 ### 4. Optional: Langfuse Observability Setup
 ```bash
+# Return to project root first
+cd ../../
+
 # Start Langfuse (Docker required)
 docker compose -f docker-compose.langfuse.yml up -d
 
-# Create .env file in backend directory
-echo "LANGFUSE_PUBLIC_KEY=your_public_key" >> agentic-stock-research/.env
-echo "LANGFUSE_SECRET_KEY=your_secret_key" >> agentic-stock-research/.env
-echo "LANGFUSE_HOST=http://localhost:3100" >> agentic-stock-research/.env
+# Create backend .env file with Langfuse settings
+cat > agentic-stock-research/.env << EOF
+LANGFUSE_PUBLIC_KEY=your_public_key
+LANGFUSE_SECRET_KEY=your_secret_key
+LANGFUSE_HOST=http://localhost:3100
+EOF
 ```
 
 ---
 
 ## 🏃‍♂️ Running the Services
 
-### Method 1: Quick Start Script
+### Method 1: Quick Start Script (Recommended)
 ```bash
-# Run everything with one command
+# From project root, run everything with one command
 ./scripts/dev.sh
+
+# To check if services are running
+./scripts/pids.sh
 ```
 
 ### Method 2: Manual Service Startup
 
 #### Start Backend
 ```bash
-cd /Users/govindak/workspace/EquiSense_AI
+# From project root
 source .venv/bin/activate
+export PYTHONPATH="$PWD/agentic-stock-research"
 
-# Set environment and start backend
-OLLAMA_MODEL="gemma3:4b" PYTHONPATH=/Users/govindak/workspace/EquiSense_AI/agentic-stock-research python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Start backend (foreground)
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # Or run in background
-OLLAMA_MODEL="gemma3:4b" PYTHONPATH=/Users/govindak/workspace/EquiSense_AI/agentic-stock-research python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload &
 ```
 
 #### Start Frontend
 ```bash
-cd /Users/govindak/workspace/EquiSense_AI/agentic-stock-research/frontend
+# From project root, navigate to frontend
+cd agentic-stock-research/frontend
+
+# Start frontend (foreground)
 npm run dev
 
 # Or run in background
@@ -131,13 +147,16 @@ Once all services are running:
 
 ### Check Running Services
 ```bash
+# Use our custom script to check PIDs
+./scripts/pids.sh
+
+# Or manually check specific ports
+lsof -i :8000  # Backend
+lsof -i :5173  # Frontend 
+lsof -i :11434 # Ollama
+
 # Check all related processes
 ps aux | grep -E "(uvicorn|npm|ollama)" | grep -v grep
-
-# Check specific ports
-lsof -i :8000  # Backend
-lsof -i :5173  # Frontend
-lsof -i :11434 # Ollama
 ```
 
 ### Stop Services
@@ -152,14 +171,21 @@ pkill -f "npm run dev"
 
 ### Restart Services
 ```bash
-# Quick restart backend
-cd /Users/govindak/workspace/EquiSense_AI
-source .venv/bin/activate
-OLLAMA_MODEL="gemma3:4b" PYTHONPATH=/Users/govindak/workspace/EquiSense_AI/agentic-stock-research python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Quick restart - use the dev script
+./scripts/dev.sh
 
-# Quick restart frontend
-cd agentic-stock-research/frontend
-npm run dev
+# Or restart manually:
+# 1. Kill existing processes
+pkill -f "uvicorn"
+pkill -f "npm run dev"
+
+# 2. Start backend (from project root)
+source .venv/bin/activate
+export PYTHONPATH="$PWD/agentic-stock-research"
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload &
+
+# 3. Start frontend
+cd agentic-stock-research/frontend && npm run dev &
 ```
 
 ---
@@ -193,6 +219,14 @@ curl -X POST http://localhost:8000/api/chat \
 curl http://localhost:8000/countries
 ```
 
+### Multi‑Ticker Analysis (Comparative View)
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"tickers": ["AAPL", "MSFT", "GOOGL"], "country": "United States"}' \
+  | jq '{summary: .comparative_analysis.summary, recommendations: .comparative_analysis.recommendations}'
+```
+
 ---
 
 ## 🆕 Enhanced Features
@@ -203,6 +237,14 @@ curl http://localhost:8000/countries
 - **📈 Growth Prospects**: Multi-timeline growth projections (1Y/3Y/5Y+)
 - **💰 Enhanced Valuation**: DCF, DDM, Comparables, Sum-of-Parts models
 - **🧠 AI-Powered Synthesis**: LLM-driven investment recommendations
+
+### New Capabilities (2025)
+- **📈 Multi‑Ticker Comparative Analysis**: Parallel synthesis for multiple tickers with rankings and portfolio suggestions
+- **🧮 Adaptive Scoring**: Sector/regime‑aware weights with confidence aggregation and explainability
+- **🔎 Explainability**: Component‑level contributions and per‑metric rationale included in decisions
+- **💱 Currency Normalization**: Cross‑market financials converted via live FX rates for apples‑to‑apples comparison
+- **🌐 Data Federation (Optional)**: Multi‑source reconciliation (Yahoo Finance + optional AlphaVantage/Polygon) with outlier handling
+- **⚡ Real‑Time (Optional)**: WebSocket/polling streams, market event triggers, and incremental re‑analysis
 
 ### International Support
 - **🇺🇸 US Markets**: NYSE, NASDAQ
@@ -215,19 +257,19 @@ curl http://localhost:8000/countries
 
 ### Backend Issues
 ```bash
-# Check Python environment
-which python3  # Should point to .venv/bin/python3
+# Check Python environment (should point to .venv/bin/python3)
+which python3
 
-# Test imports
-cd /Users/govindak/workspace/EquiSense_AI
+# Test imports (from project root)
 source .venv/bin/activate
+export PYTHONPATH="$PWD/agentic-stock-research"
 python3 -c "from app.main import app; print('✅ Backend imports OK')"
 
 # Check Ollama connection
 curl http://localhost:11434/api/tags
 
 # Manual backend start with verbose logging
-OLLAMA_MODEL="gemma3:4b" PYTHONPATH=/Users/govindak/workspace/EquiSense_AI/agentic-stock-research python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level debug
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level debug
 ```
 
 ### Frontend Issues
@@ -278,9 +320,15 @@ lsof -ti :8000 | xargs kill -9
 
 ### Backend Tests
 ```bash
-cd /Users/govindak/workspace/EquiSense_AI
+# From project root
 source .venv/bin/activate
+export PYTHONPATH="$PWD/agentic-stock-research"
+
+# Run all tests
 pytest tests/ -v
+
+# Run specific test files
+pytest agentic-stock-research/tests/test_enhancements.py -v
 ```
 
 ### Frontend Tests
@@ -318,11 +366,21 @@ Create `.env` files for configuration:
 
 **Backend** (`agentic-stock-research/.env`):
 ```env
+# Core LLM Settings
 OLLAMA_MODEL=gemma3:4b
+LLM_NAME=gemma3:4b
+LLM_HOST=localhost
+LLM_PORT=11434
+
+# Observability (Optional)
 LANGFUSE_PUBLIC_KEY=your_public_key
 LANGFUSE_SECRET_KEY=your_secret_key
 LANGFUSE_HOST=http://localhost:3100
-YOUTUBE_API_KEY=your_youtube_key  # Optional
+
+# API Keys (Optional)
+YOUTUBE_API_KEY=your_youtube_key
+ALPHAVANTAGE_API_KEY=your_alpha_vantage_key
+POLYGON_API_KEY=your_polygon_key
 ```
 
 **Frontend** (`agentic-stock-research/frontend/.env`):
