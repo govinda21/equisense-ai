@@ -23,6 +23,30 @@ class Decision(BaseModel):
     professional_rationale: str = Field(default="Analysis based on current market conditions and fundamental metrics.")
     professional_recommendation: str = Field(default="")
     
+    # Senior Equity Analyst Report Components
+    executive_summary: str = Field(default="")
+    financial_condition_summary: str = Field(default="")
+    latest_performance_summary: str = Field(default="")
+    key_trends: List[str] = Field(default_factory=list)
+    
+    # Investment thesis
+    growth_drivers: List[str] = Field(default_factory=list)
+    competitive_advantages: List[str] = Field(default_factory=list)
+    key_risks: List[str] = Field(default_factory=list)
+    
+    # Investment justification
+    quantitative_evidence: Dict[str, Any] = Field(default_factory=dict)
+    key_ratios_summary: str = Field(default="")
+    recent_developments: List[str] = Field(default_factory=list)
+    industry_context: str = Field(default="")
+    
+    # Outlook and targets
+    short_term_outlook: str = Field(default="")
+    long_term_outlook: str = Field(default="")
+    price_target_12m: Optional[float] = None
+    price_target_source: str = Field(default="")
+    valuation_benchmark: str = Field(default="")
+    
     # Debug and metadata fields (optional)
     llm_parsed: bool = Field(default=False)
     base_score: float = Field(default=0.5)
@@ -80,6 +104,7 @@ class TickerReport(BaseModel):
     sector_macro: SectionScore
     growth_prospects: SectionScore
     valuation: SectionScore
+    strategic_conviction: Optional[SectionScore] = None  # NEW: Strategic conviction analysis
     comprehensive_fundamentals: Optional[ComprehensiveFundamentals] = None
     decision: Decision
 

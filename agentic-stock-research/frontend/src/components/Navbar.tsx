@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Icons } from './icons'
 
-export function Navbar() {
+interface NavbarProps {
+  chatOpen?: boolean
+  onChatToggle?: () => void
+}
+
+export function Navbar({ chatOpen = false, onChatToggle }: NavbarProps) {
   const [dark, setDark] = useState(false)
   useEffect(() => {
     const root = document.documentElement
@@ -26,6 +31,19 @@ export function Navbar() {
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
             <span>Gemma3:4b Active</span>
           </div>
+          {onChatToggle && (
+            <button
+              onClick={onChatToggle}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 shadow-lg ${
+                chatOpen
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-white/70 dark:bg-slate-800/70 text-slate-600 dark:text-slate-400 hover:text-blue-500 backdrop-blur'
+              }`}
+            >
+              <Icons.MessageCircle className="w-4 h-4" />
+              {chatOpen ? 'Close AI Chat' : 'Open AI Chat'}
+            </button>
+          )}
           <button 
             className="rounded-lg border px-3 py-2 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" 
             onClick={() => setDark(v => !v)} 

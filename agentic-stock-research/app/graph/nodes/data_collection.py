@@ -43,11 +43,11 @@ async def data_collection_node(state: ResearchState, settings: AppSettings) -> R
                 def safe_float_from_series(series_row, column_name, default=0.0):
                     try:
                         if hasattr(series_row, column_name):
-                            value = getattr(series_row, column_name)
-                            return float(value.iloc[0] if hasattr(value, 'iloc') else value)
-                        else:
                             value = series_row.get(column_name, default)
                             return float(value.iloc[0] if hasattr(value, 'iloc') else value)
+                        # else:
+                        #     value = series_row.get(column_name, default)
+                        #     return float(value.iloc[0] if hasattr(value, 'iloc') else value)
                     except (AttributeError, IndexError, TypeError):
                         return default
 

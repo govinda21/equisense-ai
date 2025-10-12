@@ -33,10 +33,44 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
     logger.info(f"Starting comprehensive fundamental analysis for {ticker}")
     
     try:
-        # Get current price if available from previous analysis
+        # Get current price if available from previous analysis or fetch it directly
         current_price = None
+        
+        # Try to get current price from technicals first
         if "analysis" in state and "technicals" in state["analysis"]:
-            current_price = state["analysis"]["technicals"].get("currentPrice")
+            tech_data = state["analysis"]["technicals"]
+            # Try multiple possible locations for current price
+            current_price = (
+                tech_data.get("currentPrice") or 
+                tech_data.get("current_price") or
+                tech_data.get("details", {}).get("indicators", {}).get("last_close")
+            )
+        
+        # If not found, try to fetch from raw data
+        if not current_price and "raw_data" in state:
+            for ticker_data in state["raw_data"].values():
+                if isinstance(ticker_data, dict):
+                    current_price = (
+                        ticker_data.get("currentPrice") or 
+                        ticker_data.get("regularMarketPrice") or
+                        ticker_data.get("price")
+                    )
+                    if current_price:
+                        break
+        
+        # Last resort: try to fetch current price from yfinance directly
+        if not current_price:
+            try:
+                import yfinance as yf
+                t = yf.Ticker(ticker)
+                info = t.info or {}
+                current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+                logger.info(f"Fetched current price from yfinance for {ticker}: {current_price}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch current price from yfinance for {ticker}: {e}")
+        
+        # Log the current price for debugging
+        logger.info(f"Current price for {ticker}: {current_price}")
         
         # Parallel execution of all analysis components
         analysis_results = await asyncio.gather(
@@ -151,11 +185,11 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
         }
         
         # Update state with comprehensive analysis
-        state.setdefault("analysis", {})["comprehensive_fundamentals"] = comprehensive_analysis
+        state.setdefault("analysis", {})["fundamentals"] = comprehensive_analysis
         
         # Set confidence based on comprehensive scoring confidence
         confidence = comprehensive_score.confidence_level if comprehensive_score else 0.5
-        state.setdefault("confidences", {})["comprehensive_fundamentals"] = confidence
+        state.setdefault("confidences", {})["fundamentals"] = confidence
         
         logger.info(f"Comprehensive fundamental analysis completed for {ticker} "
                    f"(Score: {comprehensive_analysis['overall_score']}, "
@@ -168,7 +202,7 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
         logger.error(f"Comprehensive fundamental analysis failed for {ticker}: {e}")
         
         # Fallback analysis with error information
-        state.setdefault("analysis", {})["comprehensive_fundamentals"] = {
+        state.setdefault("analysis", {})["fundamentals"] = {
             "ticker": ticker,
             "error": str(e),
             "overall_score": 50.0,
@@ -176,7 +210,7 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
             "recommendation": "Hold",
             "confidence_level": 0.1
         }
-        state.setdefault("confidences", {})["comprehensive_fundamentals"] = 0.1
+        state.setdefault("confidences", {})["fundamentals"] = 0.1
         
         return state
 

@@ -19,10 +19,14 @@ function Field({ id, label, hint, children }: { id: string; label: string; hint?
   )
 }
 
-function AppContent() {
-  const [tickers, setTickers] = useState('AAPL')
-  const [country, setCountry] = useState('United States')
-  const [countries, setCountries] = useState<string[]>([])
+interface AppProps {
+  chatOpen: boolean
+}
+
+function AppContent({ chatOpen }: AppProps) {
+  const [tickers, setTickers] = useState('RELIANCE')
+  const [country, setCountry] = useState('India')
+  const [countries, setCountries] = useState<string[]>(['India', 'United States', 'United Kingdom', 'Canada'])
   const [hs, setHs] = useState(30)
   const [hl, setHl] = useState(365)
   const [loading, setLoading] = useState(false)
@@ -30,7 +34,6 @@ function AppContent() {
   const [errorType, setErrorType] = useState<'network' | 'server' | 'validation' | 'generic'>('generic')
   const [data, setData] = useState<any | null>(null)
   const [latency, setLatency] = useState<number | null>(null)
-  const [chatOpen, setChatOpen] = useState(false)
   const [analysisProgress, setAnalysisProgress] = useState(0)
   
   const toast = useToastHelpers()
@@ -66,7 +69,7 @@ function AppContent() {
         
         // Only update state if component is still mounted
         if (isMounted) {
-          setCountries(['United States', 'India', 'United Kingdom', 'Canada'])
+          setCountries(['India', 'United States', 'United Kingdom', 'Canada'])
         }
       }
     }
@@ -81,9 +84,9 @@ function AppContent() {
 
   // Update default ticker based on country selection
   useEffect(() => {
-    if (country === 'India' && tickers === 'AAPL') {
-      setTickers('JIOFIN')
-    } else if (country === 'United States' && (tickers === 'JIOFIN' || tickers === 'BAJFINANCE')) {
+    if (country === 'India' && (tickers === 'AAPL' || tickers === 'MSFT')) {
+      setTickers('RELIANCE')
+    } else if (country === 'United States' && (tickers === 'RELIANCE' || tickers === 'TCS' || tickers === 'HDFCBANK')) {
       setTickers('AAPL')
     }
   }, [country])
@@ -268,27 +271,8 @@ function AppContent() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-blue-50 dark:from-slate-900 dark:to-slate-800">
-      {/* navbar extracted to main.tsx previously; keeping only content here */}
       <main className="flex-1 py-8">
         <div className="container">
-          {/* Header with Chat Toggle */}
-          <div className="flex justify-between items-center mb-6">
-            <div className="flex items-center gap-3">
-              <Icons.TrendingUp className="w-8 h-8 text-blue-500" />
-              <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">EquiSense AI</h1>
-            </div>
-            <button
-              onClick={() => setChatOpen(!chatOpen)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 shadow-lg ${
-                chatOpen
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-white/70 dark:bg-slate-800/70 text-slate-600 dark:text-slate-400 hover:text-blue-500 backdrop-blur'
-              }`}
-            >
-              <Icons.MessageCircle className="w-4 h-4" />
-              {chatOpen ? 'Close AI Chat' : 'Open AI Chat'}
-            </button>
-          </div>
 
           {/* Side-by-side Layout */}
           <div className="flex gap-6 h-[calc(100vh-180px)]">
@@ -428,11 +412,11 @@ function AppContent() {
 }
 
 // Main App component with providers
-export default function App() {
+export default function App({ chatOpen }: AppProps) {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <AppContent />
+        <AppContent chatOpen={chatOpen} />
       </ToastProvider>
     </ErrorBoundary>
   )

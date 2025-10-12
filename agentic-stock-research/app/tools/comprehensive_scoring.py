@@ -323,7 +323,8 @@ class ComprehensiveScoringEngine:
             score_components = {}
             
             # DCF-based scoring (0-50 points)
-            if "error" not in dcf_result:
+            if "error" not in dcf_result and dcf_result.get("intrinsic_value"):
+                logger.info(f"DCF valuation successful for {ticker}")
                 margin_of_safety = dcf_result.get("margin_of_safety", 0)
                 if margin_of_safety >= 0.3:  # >30% MoS
                     score_components["dcf"] = 50
@@ -336,7 +337,10 @@ class ComprehensiveScoringEngine:
                 else:  # Negative MoS (overvalued)
                     score_components["dcf"] = 10
             else:
-                score_components["dcf"] = 25  # Neutral if DCF fails
+                logger.warning(f"DCF failed for {ticker}, using P/E fallback valuation")
+                # P/E Fallback Valuation
+                pe_fallback_score = self._calculate_pe_fallback_score(fundamentals, current_price, ticker)
+                score_components["dcf"] = pe_fallback_score
             
             # P/E ratio scoring (0-25 points)
             if pe > 0:
@@ -420,6 +424,65 @@ class ComprehensiveScoringEngine:
         except Exception as e:
             logger.error(f"Valuation scoring failed for {ticker}: {e}")
             return PillarScore(50.0, 0.2, {}, [], [str(e)], "Low")
+    
+    def _calculate_pe_fallback_score(self, fundamentals: Dict[str, Any], current_price: Optional[float], ticker: str) -> float:
+        """Calculate P/E-based fallback score when DCF fails"""
+        try:
+            logger.info(f"Calculating P/E fallback score for {ticker}")
+            
+            # Get P/E ratios
+            trailing_pe = fundamentals.get("trailingPE")
+            forward_pe = fundamentals.get("forwardPE")
+            pe = trailing_pe or forward_pe
+            
+            if not pe or pe <= 0:
+                logger.warning(f"No valid P/E ratio for {ticker}, using neutral score")
+                return 25  # Neutral score
+            
+            # Get sector for industry comparison
+            sector = fundamentals.get("sector", "Technology")
+            industry_pe = self._get_industry_average_pe(sector)
+            
+            # Calculate relative P/E score
+            pe_ratio = pe / industry_pe
+            
+            if pe_ratio <= 0.6:  # Trading at <60% of industry average
+                score = 45  # Very attractive
+            elif pe_ratio <= 0.8:  # Trading at <80% of industry average
+                score = 35  # Attractive
+            elif pe_ratio <= 1.0:  # Trading at industry average
+                score = 25  # Fair
+            elif pe_ratio <= 1.3:  # Trading at <130% of industry average
+                score = 15  # Expensive
+            else:  # Trading at >130% of industry average
+                score = 5   # Very expensive
+            
+            logger.info(f"P/E fallback for {ticker}: pe={pe:.1f}, industry_pe={industry_pe:.1f}, ratio={pe_ratio:.2f}, score={score}")
+            return float(score)
+            
+        except Exception as e:
+            logger.error(f"P/E fallback scoring failed for {ticker}: {e}")
+            return 25.0  # Neutral fallback
+    
+    def _get_industry_average_pe(self, sector: str) -> float:
+        """Get industry average P/E ratio by sector"""
+        # Industry average P/E ratios for Indian/Global markets
+        industry_pes = {
+            "Technology": 25.0,
+            "Healthcare": 22.0,
+            "Financial Services": 12.0,
+            "Consumer Cyclical": 18.0,
+            "Consumer Defensive": 20.0,
+            "Industrials": 16.0,
+            "Energy": 15.0,
+            "Utilities": 18.0,
+            "Real Estate": 20.0,
+            "Materials": 14.0,
+            "Communication Services": 20.0,
+            "Basic Materials": 14.0
+        }
+        
+        return industry_pes.get(sector, 18.0)  # Default to 18 if sector not found
     
     async def _score_growth_prospects(self, ticker: str) -> PillarScore:
         """Score growth prospects pillar (20% weight)"""
@@ -717,24 +780,71 @@ class ComprehensiveScoringEngine:
             position_sizing = 1.0  # 1% of portfolio (minimal exposure)
         
         # Entry zone, target, and stop loss
-        if current_price:
-            # Use DCF-based targets if available
-            valuation_metrics = pillar_scores["valuation"].key_metrics
-            intrinsic_value = valuation_metrics.get("intrinsic_value", current_price)
-            
-            if intrinsic_value > 0:
-                entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
-                target_price = intrinsic_value * 1.2
-                stop_loss = current_price * 0.85
+        # Use DCF-based targets if available
+        valuation_metrics = pillar_scores["valuation"].key_metrics
+        intrinsic_value = valuation_metrics.get("intrinsic_value", 0)
+        
+        # Try to get DCF values directly first
+        try:
+            dcf_result = await perform_dcf_valuation(ticker, current_price)
+            if "error" not in dcf_result:
+                # Use DCF-calculated trading rules
+                dcf_buy_zone = dcf_result.get("buy_zone", 0)
+                dcf_target_price = dcf_result.get("target_price", 0)
+                dcf_stop_loss = dcf_result.get("stop_loss", 0)
+                
+                if dcf_buy_zone and dcf_target_price and dcf_stop_loss:
+                    # Use DCF values if available
+                    entry_zone = (dcf_buy_zone * 0.95, dcf_buy_zone * 1.05)  # Small range around buy zone
+                    target_price = dcf_target_price
+                    stop_loss = dcf_stop_loss
+                    logger.info(f"Using DCF trading rules for {ticker}: buy_zone={dcf_buy_zone}, target={dcf_target_price}, stop={dcf_stop_loss}")
+                else:
+                    # Fallback to intrinsic value based calculations
+                    if intrinsic_value > 0:
+                        entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
+                        target_price = intrinsic_value * 1.2
+                        stop_loss = (current_price or intrinsic_value) * 0.85
+                    else:
+                        # Final fallback
+                        if current_price:
+                            entry_zone = (current_price * 0.9, current_price * 1.05)
+                            target_price = current_price * 1.25
+                            stop_loss = current_price * 0.85
+                        else:
+                            entry_zone = (0.0, 0.0)
+                            target_price = 0.0
+                            stop_loss = 0.0
             else:
-                # Fallback to price-based levels
-                entry_zone = (current_price * 0.9, current_price * 1.05)
-                target_price = current_price * 1.25
-                stop_loss = current_price * 0.85
-        else:
-            entry_zone = (0.0, 0.0)
-            target_price = 0.0
-            stop_loss = 0.0
+                # DCF failed, use intrinsic value or price-based fallback
+                if intrinsic_value > 0:
+                    entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
+                    target_price = intrinsic_value * 1.2
+                    stop_loss = (current_price or intrinsic_value) * 0.85
+                elif current_price:
+                    entry_zone = (current_price * 0.9, current_price * 1.05)
+                    target_price = current_price * 1.25
+                    stop_loss = current_price * 0.85
+                else:
+                    entry_zone = (0.0, 0.0)
+                    target_price = 0.0
+                    stop_loss = 0.0
+        except Exception as e:
+            logger.warning(f"Failed to get DCF trading rules for {ticker}: {e}")
+            # Fallback to basic calculations
+            if current_price:
+                if intrinsic_value > 0:
+                    entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
+                    target_price = intrinsic_value * 1.2
+                    stop_loss = current_price * 0.85
+                else:
+                    entry_zone = (current_price * 0.9, current_price * 1.05)
+                    target_price = current_price * 1.25
+                    stop_loss = current_price * 0.85
+            else:
+                entry_zone = (0.0, 0.0)
+                target_price = 0.0
+                stop_loss = 0.0
         
         # Time horizon based on score quality
         if overall_score >= 75:

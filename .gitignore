@@ -1,17 +1,67 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
 .env
 .venv/
-.cache/
-.playwright/
+venv/
+ENV/
+env/
+
+# Testing
 .pytest_cache/
 .coverage
 htmlcov/
-.dist/
-.eggs/
+.tox/
+
+# Build artifacts
 build/
 dist/
 *.egg-info/
+.eggs/
+.dist/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+app.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+backend.log
+logs/
+
+# Cache
+.cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Playwright
+.playwright/
+
+# Node
 node_modules/
+package-lock.json
+
+# Reports
 reports/
+
+# Generated files
 docs/graph_diagram.png
+response.txt
+Modelfile

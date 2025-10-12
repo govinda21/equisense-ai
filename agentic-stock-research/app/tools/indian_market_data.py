@@ -57,7 +57,7 @@ class IndianMarketDataProvider:
     """Provider for Indian market-specific data sources"""
     
     def __init__(self):
-        # NSE/BSE API endpoints (these would be actual endpoints)
+        # NSE/BSE API endpoints
         self.nse_base_url = "https://www.nseindia.com/api"
         self.bse_base_url = "https://api.bseindia.com"
         
@@ -68,14 +68,51 @@ class IndianMarketDataProvider:
         # Risk-free rate source (RBI/CCIL)
         self.rbi_yield_url = "https://www.rbi.org.in/Scripts/api_ccil.aspx"
         
-        # Default headers for requests
+        # Enhanced headers for NSE India API (requires proper User-Agent and Referer)
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
+            "Referer": "https://www.nseindia.com/",
+            "X-Requested-With": "XMLHttpRequest",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
         }
+        
+        # Session for maintaining cookies
+        self._session_cookies = None
+        self._session_timestamp = None
+    
+    async def _init_nse_session(self, client: httpx.AsyncClient) -> dict:
+        """
+        Initialize NSE session by visiting homepage to get cookies
+        NSE requires a valid session with cookies to access API endpoints
+        """
+        try:
+            # Check if session is recent (< 5 minutes old)
+            if (self._session_cookies and self._session_timestamp and 
+                (datetime.now() - self._session_timestamp).seconds < 300):
+                return self._session_cookies
+            
+            # Visit NSE homepage to get cookies
+            homepage_response = await client.get("https://www.nseindia.com", headers=self.headers)
+            
+            if homepage_response.status_code == 200:
+                cookies = dict(homepage_response.cookies)
+                self._session_cookies = cookies
+                self._session_timestamp = datetime.now()
+                logger.info(f"NSE session initialized successfully with {len(cookies)} cookies")
+                return cookies
+            else:
+                logger.warning(f"Failed to initialize NSE session: {homepage_response.status_code}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"NSE session initialization error: {e}")
+            return {}
     
     async def get_shareholding_pattern(self, symbol: str, exchange: str = "NSE") -> List[ShareholdingPattern]:
         """
@@ -99,15 +136,18 @@ class IndianMarketDataProvider:
             # NSE shareholding pattern endpoint
             url = f"{self.nse_base_url}/corporates-shareholding-pattern"
             
-            async with httpx.AsyncClient(timeout=30.0, headers=self.headers) as client:
+            async with httpx.AsyncClient(timeout=30.0, headers=self.headers, follow_redirects=True) as client:
+                # Initialize session first to get cookies
+                cookies = await self._init_nse_session(client)
+                
                 # First get the company info to get the correct symbol format
                 company_url = f"{self.nse_base_url}/equity-meta-info"
                 params = {"symbol": symbol.upper()}
                 
-                response = await client.get(company_url, params=params)
+                response = await client.get(company_url, params=params, cookies=cookies)
                 
                 if response.status_code != 200:
-                    logger.warning(f"NSE company info request failed: {response.status_code}")
+                    logger.warning(f"NSE company info request failed: {response.status_code} (cookies: {len(cookies)} present)")
                     return []
                 
                 # Now fetch shareholding pattern
@@ -117,10 +157,10 @@ class IndianMarketDataProvider:
                     "to_date": datetime.now().strftime("%d-%m-%Y")
                 }
                 
-                shareholding_response = await client.get(url, params=shareholding_params)
+                shareholding_response = await client.get(url, params=shareholding_params, cookies=cookies)
                 
                 if shareholding_response.status_code != 200:
-                    logger.warning(f"NSE shareholding request failed: {shareholding_response.status_code}")
+                    logger.warning(f"NSE shareholding request failed: {shareholding_response.status_code} (cookies: {len(cookies)} present)")
                     return []
                 
                 data = shareholding_response.json()
@@ -185,17 +225,20 @@ class IndianMarketDataProvider:
         try:
             url = f"{self.nse_base_url}/corporates-corporateActions"
             
-            async with httpx.AsyncClient(timeout=30.0, headers=self.headers) as client:
+            async with httpx.AsyncClient(timeout=30.0, headers=self.headers, follow_redirects=True) as client:
+                # Initialize session first to get cookies
+                cookies = await self._init_nse_session(client)
+                
                 params = {
                     "symbol": symbol.upper(),
                     "from_date": (datetime.now() - timedelta(days=365*2)).strftime("%d-%m-%Y"),
                     "to_date": datetime.now().strftime("%d-%m-%Y")
                 }
                 
-                response = await client.get(url, params=params)
+                response = await client.get(url, params=params, cookies=cookies)
                 
                 if response.status_code != 200:
-                    logger.warning(f"NSE corporate actions request failed: {response.status_code}")
+                    logger.warning(f"NSE corporate actions request failed: {response.status_code} (cookies: {len(cookies)} present)")
                     return []
                 
                 data = response.json()
@@ -246,16 +289,19 @@ class IndianMarketDataProvider:
             # NSE financial results endpoint
             url = f"{self.nse_base_url}/corporates-financial-results"
             
-            async with httpx.AsyncClient(timeout=30.0, headers=self.headers) as client:
+            async with httpx.AsyncClient(timeout=30.0, headers=self.headers, follow_redirects=True) as client:
+                # Initialize session first to get cookies
+                cookies = await self._init_nse_session(client)
+                
                 params = {
                     "symbol": symbol.upper(),
                     "period": "annual"  # or "quarterly"
                 }
                 
-                response = await client.get(url, params=params)
+                response = await client.get(url, params=params, cookies=cookies)
                 
                 if response.status_code != 200:
-                    logger.warning(f"NSE financial filings request failed: {response.status_code}")
+                    logger.warning(f"NSE financial filings request failed: {response.status_code} (cookies: {len(cookies)} present)")
                     return []
                 
                 data = response.json()
@@ -451,7 +497,36 @@ class IndianMarketDataProvider:
 
 # Convenience functions for integration
 async def get_indian_market_data(symbol: str, exchange: str = "NSE") -> Dict[str, Any]:
-    """Get comprehensive Indian market data for a symbol"""
+    """
+    Get comprehensive Indian market data for a symbol
+    
+    Now uses multi-source federation (v2) for improved data quality and coverage.
+    Falls back to legacy provider if v2 system fails.
+    """
+    try:
+        # Try the new multi-source federation system first
+        from app.tools.indian_market_data_v2 import fetch_indian_market_data
+        
+        # Normalize ticker format (add .NS or .BO suffix if missing)
+        ticker = symbol
+        if not ticker.endswith((".NS", ".BO")):
+            ticker = f"{symbol}.{exchange[:2]}"  # NSE -> NS, BSE -> BO
+        
+        # Fetch from multi-source system
+        logger.info(f"Fetching Indian market data using multi-source federation for {ticker}")
+        federated_data = await fetch_indian_market_data(ticker)
+        
+        if federated_data and len(federated_data) > 0:
+            logger.info(f"Successfully fetched {len(federated_data)} fields from multi-source federation")
+            return federated_data
+        else:
+            logger.warning(f"Multi-source federation returned no data for {ticker}, falling back to legacy provider")
+    
+    except Exception as e:
+        logger.warning(f"Multi-source federation failed for {symbol}: {e}, falling back to legacy provider")
+    
+    # Fallback to legacy provider
+    logger.info(f"Using legacy Indian market data provider for {symbol}")
     provider = IndianMarketDataProvider()
     return await provider.get_comprehensive_company_data(symbol, exchange)
 

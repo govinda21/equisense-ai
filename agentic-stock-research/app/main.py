@@ -24,6 +24,12 @@ from app.tools.ticker_mapping import (
 )
 from app.schemas.output import ResearchResponse
 from app.graph.workflow import build_research_graph
+from app.api.portfolio import router as portfolio_router
+from app.api.backtesting import router as backtesting_router
+from app.api.monitoring import router as monitoring_router
+from app.api.reports import router as reports_router
+from app.api.auth import router as auth_router
+from app.api.performance import router as performance_router
 
 
 def create_app() -> FastAPI:
@@ -59,6 +65,14 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+    # Include API routers
+    app.include_router(portfolio_router)
+    app.include_router(backtesting_router)
+    app.include_router(monitoring_router)
+    app.include_router(reports_router)
+    app.include_router(auth_router)
+    app.include_router(performance_router)
     
     # Custom validation error handler for better debugging
     @app.exception_handler(RequestValidationError)

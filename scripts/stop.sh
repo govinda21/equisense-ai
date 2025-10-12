@@ -148,8 +148,11 @@ _stop_service() {
   fi
 
   # convert newline-separated list to array of unique pids
-  mapfile -t pids < <(printf "%s\n" "$raw" | awk '!seen[$0]++' | tr -s '[:space:]' '\n' )
-  for pid in "${pids[@]}"; do
+  local pids_array=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && pids_array+=("$line")
+  done < <(printf "%s\n" "$raw" | awk '!seen[$0]++' | tr -s '[:space:]' '\n')
+  for pid in "${pids_array[@]}"; do
     # safety: ensure pid is integer
     if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
       printf "  ▶ Ignoring non-numeric PID: %s\n" "$pid"

@@ -9,7 +9,8 @@ function currencySymbolForTicker(ticker?: string): string {
 }
 
 function formatAmountByCurrency(value?: number, ticker?: string): string {
-  if (value === undefined || value === null || isNaN(Number(value))) return '—'
+  // Return dash for undefined, null, NaN, or 0 values
+  if (value === undefined || value === null || isNaN(Number(value)) || value === 0) return '—'
   const symbol = currencySymbolForTicker(ticker)
   const v = Number(value)
   // Heuristic: INR formatting (Crores/Lakhs) for NSE/BSE tickers
@@ -27,16 +28,10 @@ function formatAmountByCurrency(value?: number, ticker?: string): string {
   return `${symbol}${v.toLocaleString()}`
 }
 
-// Stars component not currently used; kept for future nuanced star rendering
-
-function formatPct(value?: number, digits: number = 1): string {
-  if (value === undefined || value === null || isNaN(Number(value))) return '—'
-  return `${(Number(value) * 100).toFixed(digits)}%`
-}
-
-function formatNumber(value?: number, digits: number = 2): string {
-  if (value === undefined || value === null || isNaN(Number(value))) return '—'
-  return Number(value).toFixed(digits)
+function formatBuyZone(low?: number, high?: number, ticker?: string): string {
+  // Return dash if both values are 0, undefined, or null
+  if ((!low || low === 0) && (!high || high === 0)) return '—'
+  return `${formatAmountByCurrency(low, ticker)} – ${formatAmountByCurrency(high, ticker)}`
 }
 
 export function ResultSummaryGrid({ report }: { report: any }) {
@@ -46,510 +41,440 @@ export function ResultSummaryGrid({ report }: { report: any }) {
   const signals = report?.technicals?.details?.signals
   const indicators = report?.technicals?.details?.indicators
   const comp = report?.comprehensive_fundamentals
-  // Build a client-side fallback executive summary if backend is missing it
-  const execSummary: string | undefined = (() => {
-    if (report?.executive_summary) return report.executive_summary
-    try {
-      const action = report?.decision?.action || 'Hold'
-      const score = Number(report?.decision?.rating || 0)
-      const scorePct = Math.round((score / 5) * 100)
-      const iv = comp?.intrinsic_value
-      const mos = comp?.margin_of_safety
-      const positives: string[] = report?.decision?.top_reasons_for || []
-      const negatives: string[] = report?.decision?.top_reasons_against || []
-      const parts: string[] = []
-      parts.push(`${action}: ${scorePct}`)
-      if (typeof iv === 'number') parts.push(`IV ${formatAmountByCurrency(iv, ticker)}`)
-      if (typeof mos === 'number') parts.push(`MoS ${(mos * 100).toFixed(0)}%`)
-      if (positives.length) parts.push(`Key: ${positives.slice(0, 2).join(', ')}`)
-      if (negatives.length) parts.push(`Risks: ${negatives.slice(0, 2).join(', ')}`)
-      return parts.join('; ')
-    } catch {
-      return undefined
-    }
-  })()
+  
+  // Available analysis sections (only show if data exists)
+  const filings = report?.filings
+  const earningsCall = report?.earnings_call_analysis
+  const strategicConviction = report?.strategic_conviction
+  const insiderTracking = report?.insider_tracking
+
   return (
-    <div className="grid md:grid-cols-2 gap-6">
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Recommendation & Rating</h3>
-          <Icons.Star className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {execSummary && (
-          <div className="mb-3 text-sm text-slate-800 bg-slate-50 border rounded p-3">
-            <strong>Executive Summary:</strong> {execSummary}
+    <div className="space-y-6">
+      {/* 1. PRIMARY RECOMMENDATION - Full Width */}
+      <div className="card p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold text-slate-900">Investment Recommendation</h2>
+          <div className="flex items-center space-x-2">
+            <Icons.Star className="w-6 h-6 text-yellow-500" />
+            <span className="text-sm text-slate-600">Professional Analysis</span>
           </div>
-        )}
-        <div className="space-y-3">
-          {/* Clean single-line recommendation format */}
-          <div className="text-lg font-medium text-slate-900">
-            {report?.decision?.action} — {report?.decision?.rating}/5 {(() => {
-              const rating = report?.decision?.rating || 0;
-              const fullStars = Math.floor(rating);
-              const hasHalf = (rating - fullStars) >= 0.5;
-              let stars = "★".repeat(fullStars);
-              if (hasHalf && fullStars < 5) stars += "☆";
-              stars += "☆".repeat(5 - stars.length);
-              return stars;
-            })()}
+        </div>
+        
+        {/* Recommendation Header */}
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-4">
+              <div className="text-4xl font-bold text-blue-900">
+                {report?.decision?.action || 'Hold'}
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-semibold text-blue-700">
+                  {report?.decision?.rating?.toFixed(1) || '2.5'}/5.0
+                </div>
+                <div className="text-lg tracking-wider text-yellow-500">
+                  {(() => {
+                    const rating = report?.decision?.rating || 0;
+                    const fullStars = Math.floor(rating);
+                    const hasHalf = (rating - fullStars) >= 0.5;
+                    let stars = "★".repeat(fullStars);
+                    if (hasHalf && fullStars < 5) stars += "☆";
+                    stars += "☆".repeat(5 - stars.length);
+                    return stars;
+                  })()}
+                </div>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-sm text-slate-600 mb-1">Grade</div>
+              <div className="text-2xl font-bold text-slate-900">
+                {report?.decision?.letter_grade || 'C'}
+              </div>
+            </div>
           </div>
           
-          {/* Professional rationale */}
-          <div className="text-sm text-slate-700 leading-relaxed">
-            <strong className="text-slate-900">Rationale:</strong> {(() => {
-              // Generate professional rationale from available data
-              const action = report?.decision?.action || "Hold";
-              const positives = report?.decision?.top_reasons_for || [];
-              const negatives = report?.decision?.top_reasons_against || [];
-              
-              if (action === "Hold") {
-                return `The stock demonstrates stable performance with balanced risks and opportunities${positives.length > 0 ? `, supported by ${positives[0].toLowerCase()}` : ''}${negatives.length > 0 ? ` while monitoring ${negatives[0].toLowerCase()}` : ''}. No strong short-term catalysts identified.`;
-              } else if (action === "Buy" || action === "Strong Buy") {
-                return `Strong fundamentals and positive market dynamics support upward potential${positives.length > 0 ? `, particularly ${positives[0].toLowerCase()}` : ''}. Investment thesis remains compelling despite ${negatives.length > 0 ? negatives[0].toLowerCase() : 'market volatility'}.`;
-              } else {
-                return `Current market conditions and risk factors suggest caution${negatives.length > 0 ? `, primarily due to ${negatives[0].toLowerCase()}` : ''}. Consider defensive positioning until outlook improves.`;
-              }
-            })()}
+          {/* Executive Summary */}
+          {report?.decision?.executive_summary && (
+            <div className="bg-white rounded-lg p-4 border border-blue-100">
+              <div className="text-sm font-semibold text-slate-900 mb-2">Executive Summary</div>
+              <div className="text-sm text-slate-700 leading-relaxed">
+                {report.decision.executive_summary}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Key Metrics Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          {report?.decision?.price_target_12m && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-green-600 uppercase font-medium mb-1">Price Target</div>
+              <div className="text-xl font-bold text-green-900">
+                {formatAmountByCurrency(report.decision.price_target_12m, ticker)}
+              </div>
+              <div className="text-xs text-green-600">{report.decision.price_target_source}</div>
+            </div>
+          )}
+          
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
+            <div className="text-xs text-blue-600 uppercase font-medium mb-1">Expected Return</div>
+            <div className={`text-xl font-bold ${
+              (report.decision.expected_return_pct || 0) > 0 ? 'text-green-600' : 'text-red-600'
+            }`}>
+              {report.decision.expected_return_pct > 0 ? '+' : ''}{report.decision.expected_return_pct?.toFixed(1) || '0'}%
+            </div>
           </div>
+
+          {comp?.intrinsic_value && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-purple-600 uppercase font-medium mb-1">Intrinsic Value</div>
+              <div className="text-xl font-bold text-purple-900">
+                {formatAmountByCurrency(comp.intrinsic_value, ticker)}
+              </div>
+              <div className="text-xs text-purple-600">
+                MoS: {comp.margin_of_safety ? (comp.margin_of_safety * 100).toFixed(0) + '%' : '—'}
+              </div>
+            </div>
+          )}
+
+          {comp?.target_price && (
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-orange-600 uppercase font-medium mb-1">Target Price</div>
+              <div className="text-xl font-bold text-orange-900">
+                {formatAmountByCurrency(comp.target_price, ticker)}
+              </div>
+              <div className="text-xs text-orange-600">
+                Stop: {formatAmountByCurrency(comp.stop_loss, ticker)}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Investment Thesis */}
+        <div className="grid md:grid-cols-3 gap-4 mb-6">
+          {/* Growth Drivers */}
+          {report?.decision?.growth_drivers?.length > 0 && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+              <h4 className="font-semibold text-emerald-900 mb-3 flex items-center">
+                <Icons.TrendingUp className="w-5 h-5 mr-2" />
+                Growth Drivers
+              </h4>
+              <ul className="text-sm text-emerald-800 space-y-2">
+                {report.decision.growth_drivers.slice(0, 3).map((driver: string, i: number) => (
+                  <li key={i} className="flex items-start">
+                    <span className="mr-2 text-emerald-600">•</span>
+                    <span>{driver}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Competitive Advantages */}
+          {report?.decision?.competitive_advantages?.length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <h4 className="font-semibold text-blue-900 mb-3 flex items-center">
+                <Icons.Shield className="w-5 h-5 mr-2" />
+                Competitive Advantages
+              </h4>
+              <ul className="text-sm text-blue-800 space-y-2">
+                {report.decision.competitive_advantages.slice(0, 3).map((advantage: string, i: number) => (
+                  <li key={i} className="flex items-start">
+                    <span className="mr-2 text-blue-600">•</span>
+                    <span>{advantage}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Key Risks */}
+          {report?.decision?.key_risks?.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+              <h4 className="font-semibold text-red-900 mb-3 flex items-center">
+                <Icons.AlertTriangle className="w-5 h-5 mr-2" />
+                Key Risks
+              </h4>
+              <ul className="text-sm text-red-800 space-y-2">
+                {report.decision.key_risks.slice(0, 3).map((risk: string, i: number) => (
+                  <li key={i} className="flex items-start">
+                    <span className="mr-2 text-red-600">•</span>
+                    <span>{risk}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Outlook Section */}
+        <div className="grid md:grid-cols-2 gap-4">
+          {report?.decision?.short_term_outlook && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <h4 className="font-semibold text-blue-900 mb-2">Short-Term Outlook (3-6 Months)</h4>
+              <p className="text-sm text-blue-800 leading-relaxed">
+                {report.decision.short_term_outlook}
+              </p>
+            </div>
+          )}
+          
+          {report?.decision?.long_term_outlook && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <h4 className="font-semibold text-purple-900 mb-2">Long-Term Outlook (12-36 Months)</h4>
+              <p className="text-sm text-purple-800 leading-relaxed">
+                {report.decision.long_term_outlook}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* 2. COMPREHENSIVE FUNDAMENTALS - Full Width */}
       {comp && (
-        <div className="card p-5">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-lg font-medium">Comprehensive Fundamentals (DCF & Scoring)</h3>
-            <Icons.Fundamentals className="w-5 h-5 text-slate-500" aria-hidden />
+        <div className="card p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-slate-900">Comprehensive Fundamental Analysis</h2>
+            <Icons.ChartPie className="w-6 h-6 text-slate-500" />
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-slate-500">Overall Score</div>
-              <div className="font-medium">{formatNumber(comp.overall_score, 1)} / 100</div>
+          
+          {/* Pillar Scores */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-slate-500 uppercase font-medium mb-2">Financial Health</div>
+              <div className="text-2xl font-bold text-slate-900">{comp.financial_health_score?.toFixed(0) || '—'}</div>
+              <div className="text-xs text-slate-600">Score</div>
             </div>
-            <div>
-              <div className="text-slate-500">Grade</div>
-              <div className="font-medium">{comp.overall_grade ?? '—'}</div>
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-slate-500 uppercase font-medium mb-2">Valuation</div>
+              <div className="text-2xl font-bold text-slate-900">{comp.valuation_score?.toFixed(0) || '—'}</div>
+              <div className="text-xs text-slate-600">Score</div>
             </div>
-            <div>
-              <div className="text-slate-500">Intrinsic Value (DCF)</div>
-              <div className="font-medium">{formatAmountByCurrency(comp.intrinsic_value, ticker)}</div>
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-slate-500 uppercase font-medium mb-2">Growth</div>
+              <div className="text-2xl font-bold text-slate-900">{comp.growth_prospects_score?.toFixed(0) || '—'}</div>
+              <div className="text-xs text-slate-600">Score</div>
             </div>
-            <div>
-              <div className="text-slate-500">Margin of Safety</div>
-              <div className="font-medium">{formatPct(comp.margin_of_safety, 1)}</div>
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-slate-500 uppercase font-medium mb-2">Governance</div>
+              <div className="text-2xl font-bold text-slate-900">{comp.governance_score?.toFixed(0) || '—'}</div>
+              <div className="text-xs text-slate-600">Score</div>
             </div>
-            <div>
-            <div className="text-slate-500">Upside Potential</div>
-              <div className="font-medium">{(() => {
-                const v = typeof comp.upside_potential === 'number' ? comp.upside_potential : (typeof comp.margin_of_safety === 'number' ? comp.margin_of_safety : undefined)
-                return formatPct(v, 1)
-              })()}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Buy Zone</div>
-              <div className="font-medium">{`${formatAmountByCurrency(comp.entry_zone_low, ticker)} – ${formatAmountByCurrency(comp.entry_zone_high, ticker)}`}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Target Price</div>
-              <div className="font-medium">{formatAmountByCurrency(comp.target_price, ticker)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Stop Loss</div>
-              <div className="font-medium">{formatAmountByCurrency(comp.stop_loss, ticker)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Time Horizon</div>
-              <div className="font-medium">{comp.time_horizon_months ? `${comp.time_horizon_months} months` : '—'}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Risk Rating</div>
-              <div className="font-medium">{comp.risk_rating ?? '—'}</div>
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-center">
+              <div className="text-xs text-slate-500 uppercase font-medium mb-2">Macro</div>
+              <div className="text-2xl font-bold text-slate-900">{comp.macro_sensitivity_score?.toFixed(0) || '—'}</div>
+              <div className="text-xs text-slate-600">Score</div>
             </div>
           </div>
-          <div className="grid grid-cols-5 gap-2 mt-4 text-xs">
+
+          {/* Trading Recommendations */}
+          <div className="grid md:grid-cols-3 gap-4 mb-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="text-sm text-blue-600 font-medium mb-2">Entry Zone</div>
+              <div className="text-xl font-bold text-blue-900">
+                {formatBuyZone(comp.entry_zone_low, comp.entry_zone_high, ticker)}
+              </div>
+            </div>
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <div className="text-sm text-green-600 font-medium mb-2">Target Price</div>
+              <div className="text-xl font-bold text-green-900">
+                {formatAmountByCurrency(comp.target_price, ticker)}
+              </div>
+            </div>
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+              <div className="text-sm text-red-600 font-medium mb-2">Stop Loss</div>
+              <div className="text-xl font-bold text-red-900">
+                {formatAmountByCurrency(comp.stop_loss, ticker)}
+              </div>
+            </div>
+          </div>
+
+          {/* Risk Assessment */}
+          <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <div className="text-slate-500">Financial</div>
-              <div className="font-medium">{formatNumber(comp.financial_health_score, 0)}</div>
+              <div className="text-sm font-semibold text-slate-900 mb-3">Key Risks</div>
+              <div className="space-y-2">
+                {comp.key_risks?.slice(0, 3).map((risk: string, idx: number) => (
+                  <div key={idx} className="text-sm text-red-700 flex items-start">
+                    <Icons.AlertTriangle className="w-4 h-4 mr-2 mt-0.5 text-red-500" />
+                    {risk}
+                  </div>
+                ))}
+              </div>
             </div>
             <div>
-              <div className="text-slate-500">Valuation</div>
-              <div className="font-medium">{formatNumber(comp.valuation_score, 0)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Growth</div>
-              <div className="font-medium">{formatNumber(comp.growth_prospects_score, 0)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Governance</div>
-              <div className="font-medium">{formatNumber(comp.governance_score, 0)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Macro</div>
-              <div className="font-medium">{formatNumber(comp.macro_sensitivity_score, 0)}</div>
+              <div className="text-sm font-semibold text-slate-900 mb-3">Key Catalysts</div>
+              <div className="space-y-2">
+                {comp.key_catalysts?.slice(0, 3).map((catalyst: string, idx: number) => (
+                  <div key={idx} className="text-sm text-green-700 flex items-start">
+                    <Icons.Shield className="w-4 h-4 mr-2 mt-0.5 text-green-500" />
+                    {catalyst}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {comp && (
+      {/* 3. TECHNICAL ANALYSIS - Full Width */}
+      {labels.length > 0 && (
+        <div className="card p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-slate-900">Technical Analysis</h2>
+            <Icons.Technical className="w-6 h-6 text-slate-500" />
+          </div>
+          
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Chart */}
+            <div>
+              <TechnicalChart labels={labels} closes={closes} />
+            </div>
+            
+            {/* Technical Indicators */}
+            <div className="space-y-4">
+              {indicators && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-slate-50 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">RSI (14)</div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      {indicators.rsi14?.toFixed(1) || '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">MACD</div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      {indicators.macd?.macd?.toFixed(2) || '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">SMA 20</div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      {formatAmountByCurrency(indicators.sma20, ticker)}
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">SMA 50</div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      {formatAmountByCurrency(indicators.sma50, ticker)}
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {signals && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="text-sm font-semibold text-blue-900 mb-2">Technical Signals</div>
+                  <div className="text-lg font-bold text-blue-700 capitalize">
+                    {signals.regime || 'Neutral'}
+                  </div>
+                  <div className="text-sm text-blue-600">
+                    Score: {(signals.score * 100).toFixed(0)}%
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. MARKET SENTIMENT - Two Columns */}
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* News Sentiment */}
         <div className="card p-5">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-lg font-medium">Governance & Red Flags</h3>
-            <Icons.Fundamentals className="w-5 h-5 text-slate-500" aria-hidden />
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold">News Sentiment</h3>
+            <Icons.Sentiment className="w-5 h-5 text-slate-500" />
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-slate-500">Governance Score</div>
-              <div className="font-medium">{formatNumber(comp.governance_score, 0)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Risk Rating</div>
-              <div className="font-medium">{comp.risk_rating || '—'}</div>
+          <div className="space-y-3">
+            {report?.news_sentiment?.summary && (
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="text-sm text-slate-700 leading-relaxed">
+                  {report.news_sentiment.summary}
+                </div>
+              </div>
+            )}
+            <div className="text-sm text-slate-600">
+              Confidence: {(report?.news_sentiment?.confidence * 100)?.toFixed(0) || 0}%
             </div>
           </div>
-          {(comp.key_risks?.length || comp.key_catalysts?.length) && (
-            <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
-              {comp.key_risks?.length > 0 && (
-                <div>
-                  <div className="text-slate-500">Top Risks</div>
-                  <div className="font-medium text-red-600">
-                    {comp.key_risks.slice(0, 3).join(', ')}
-                  </div>
+        </div>
+
+        {/* YouTube Sentiment */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold">YouTube Analysis</h3>
+            <Icons.MessageCircle className="w-5 h-5 text-slate-500" />
+          </div>
+          <div className="space-y-3">
+            {report?.youtube_sentiment?.summary && (
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="text-sm text-slate-700 leading-relaxed">
+                  {report.youtube_sentiment.summary}
                 </div>
-              )}
-              {comp.key_catalysts?.length > 0 && (
-                <div>
-                  <div className="text-slate-500">Catalysts</div>
-                  <div className="font-medium text-green-600">
-                    {comp.key_catalysts.slice(0, 3).join(', ')}
-                  </div>
-                </div>
-              )}
+              </div>
+            )}
+            <div className="text-sm text-slate-600">
+              Confidence: {(report?.youtube_sentiment?.confidence * 100)?.toFixed(0) || 0}%
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 5. ADDITIONAL ANALYSIS SECTIONS - Only show if data exists */}
+      {(filings || earningsCall || strategicConviction || insiderTracking) && (
+        <div className="grid md:grid-cols-2 gap-6">
+          {/* Filing Analysis */}
+          {filings && (
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">Regulatory Filings</h3>
+                <Icons.DocumentText className="w-5 h-5 text-slate-500" />
+              </div>
+              <div className="text-sm text-slate-600">
+                Filing analysis available
+              </div>
+            </div>
+          )}
+
+          {/* Earnings Call Analysis */}
+          {earningsCall && (
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">Earnings Call Analysis</h3>
+                <Icons.Microphone className="w-5 h-5 text-slate-500" />
+              </div>
+              <div className="text-sm text-slate-600">
+                Earnings call analysis available
+              </div>
+            </div>
+          )}
+
+          {/* Strategic Conviction */}
+          {strategicConviction && (
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">Strategic Conviction</h3>
+                <Icons.ChartBar className="w-5 h-5 text-slate-500" />
+              </div>
+              <div className="text-sm text-slate-600">
+                Strategic analysis available
+              </div>
+            </div>
+          )}
+
+          {/* Insider Tracking */}
+          {insiderTracking && (
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">Insider Trading</h3>
+                <Icons.UserGroup className="w-5 h-5 text-slate-500" />
+              </div>
+              <div className="text-sm text-slate-600">
+                Insider tracking available
+              </div>
             </div>
           )}
         </div>
       )}
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Technical Summary</h3>
-          <Icons.Technical className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {labels.length > 1 && closes.length > 1 ? (
-          <TechnicalChart labels={labels.slice(-90)} closes={closes.slice(-90)} />
-        ) : (
-          <div className="h-16 rounded bg-slate-100" aria-hidden></div>
-        )}
-        {(signals || indicators) && (
-          <div className="grid grid-cols-3 gap-3 mt-3 text-sm">
-            {signals && (
-              <>
-                <div>
-                  <div className="text-slate-500">Regime</div>
-                  <div className="font-medium">{signals.regime ?? '—'}</div>
-                </div>
-                <div>
-                  <div className="text-slate-500">Signal Score</div>
-                  <div className="font-medium">{formatNumber(signals.score, 2)}</div>
-                </div>
-              </>
-            )}
-            {indicators && (
-              <div>
-                <div className="text-slate-500">RSI(14)</div>
-                <div className="font-medium">{formatNumber(indicators.rsi14, 1)}</div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Fundamentals</h3>
-          <Icons.Fundamentals className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {report?.fundamentals?.details ? (
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-slate-500">P/E</div>
-              <div className="font-medium">{formatNumber(report.fundamentals.details.pe, 2)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">P/B</div>
-              <div className="font-medium">{formatNumber(report.fundamentals.details.pb, 2)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">ROE</div>
-              <div className="font-medium">{formatPct(report.fundamentals.details.roe, 1)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Dividend Yield</div>
-              <div className="font-medium">{formatPct(report.fundamentals.details.dividendYield, 2)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">ROIC</div>
-              <div className="font-medium">{formatPct(report.fundamentals.details.roic, 1)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">FCF Yield</div>
-              <div className="font-medium">{formatPct(report.fundamentals.details.fcfYield, 2)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">EBITDA Margin</div>
-              <div className="font-medium">{formatPct(report.fundamentals.details.ebitdaMargin, 1)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Interest Coverage</div>
-              <div className="font-medium">{report.fundamentals.details.interestCoverage ? `${formatNumber(report.fundamentals.details.interestCoverage, 1)}×` : '—'}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">PEG</div>
-              <div className="font-medium">{formatNumber(report.fundamentals.details.peg, 2)}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="h-16 rounded bg-slate-100" aria-hidden></div>
-        )}
-      </div>
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Cash Flow</h3>
-          <Icons.Cashflow className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {report?.cashflow?.details ? (
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-slate-500">OCF (latest)</div>
-              <div className="font-medium">{formatAmountByCurrency(report.cashflow.details.ocf_latest, ticker)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">OCF Trend</div>
-              <div className="font-medium">{report.cashflow.details.ocf_trend ?? '—'}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">CapEx (latest)</div>
-              <div className="font-medium">{formatAmountByCurrency(report.cashflow.details.capex_latest, ticker)}</div>
-            </div>
-            {report.cashflow.details.free_cash_flow !== undefined && (
-              <div>
-                <div className="text-slate-500">Free Cash Flow</div>
-                <div className="font-medium">{formatAmountByCurrency(report.cashflow.details.free_cash_flow, ticker)}</div>
-              </div>
-            )}
-            {report.cashflow.details.summary && (
-              <div className="md:col-span-2 text-slate-600" aria-live="polite">
-                <span className="text-xs">{report.cashflow.details.summary}</span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="h-16 rounded bg-slate-100" aria-hidden></div>
-        )}
-      </div>
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Peer Analysis</h3>
-          <Icons.Technical className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {report?.peer_analysis?.details ? (
-          <div className="space-y-2 text-sm">
-            <div>
-              <div className="text-slate-500">Relative Position</div>
-              <div className="font-medium">{report.peer_analysis.details.relative_position || '—'}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Peers Analyzed</div>
-              <div className="font-medium">{report.peer_analysis.details.peers_identified?.length || 0} companies</div>
-            </div>
-            {report.peer_analysis.details.strengths?.length > 0 && (
-              <div>
-                <div className="text-slate-500">Key Strengths</div>
-                <div className="font-medium text-green-600">{report.peer_analysis.details.strengths.slice(0, 2).join(', ')}</div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="h-16 rounded bg-slate-100" aria-hidden></div>
-        )}
-      </div>
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Analyst Consensus</h3>
-          <Icons.Star className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {report?.analyst_recommendations?.details ? (
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-slate-500">Consensus</div>
-              <div className="font-medium">{report.analyst_recommendations.details.recommendation_summary?.consensus || '—'}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Target Price</div>
-              <div className="font-medium">{(() => {
-                const target = report.analyst_recommendations.details.target_prices?.mean
-                return target ? formatAmountByCurrency(target, ticker) : '—'
-              })()}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Implied Return</div>
-              <div className="font-medium">{formatPct(report.analyst_recommendations.details.consensus_analysis?.implied_return / 100, 1)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Analyst Count</div>
-              <div className="font-medium">{report.analyst_recommendations.details.recommendation_summary?.analyst_count || '—'}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="h-16 rounded bg-slate-100" aria-hidden></div>
-        )}
-      </div>
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Growth Prospects</h3>
-          <Icons.TrendingUp className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {report?.growth_prospects?.details ? (
-          <div className="space-y-2 text-sm">
-            <div>
-              <div className="text-slate-500">Overall Outlook</div>
-              <div className="font-medium">{report.growth_prospects.details.growth_outlook?.overall_outlook || '—'}</div>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div>
-                <div className="text-slate-500">1Y Est.</div>
-                <div className="font-medium">{formatPct(report.growth_prospects.details.growth_outlook?.short_term?.revenue_growth_estimate, 1)}</div>
-              </div>
-              <div>
-                <div className="text-slate-500">3Y Est.</div>
-                <div className="font-medium">{formatPct(report.growth_prospects.details.growth_outlook?.medium_term?.revenue_growth_estimate, 1)}</div>
-              </div>
-              <div>
-                <div className="text-slate-500">5Y+ Est.</div>
-                <div className="font-medium">{formatPct(report.growth_prospects.details.growth_outlook?.long_term?.revenue_growth_estimate, 1)}</div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="h-16 rounded bg-slate-100" aria-hidden></div>
-        )}
-      </div>
-
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Enhanced Valuation</h3>
-          <Icons.Fundamentals className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        {report?.valuation?.details ? (
-          <div className="space-y-2 text-sm">
-            <div>
-              <div className="text-slate-500">Consolidated Target</div>
-              <div className="font-medium">{(() => {
-                const target = report.valuation.details.consolidated_valuation?.target_price
-                return target ? formatAmountByCurrency(target, ticker) : '—'
-              })()}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Upside/Downside</div>
-              <div className="font-medium">{formatPct(report.valuation.details.consolidated_valuation?.upside_downside_pct / 100, 1)}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Models Used</div>
-              <div className="font-medium">{report.valuation.details.consolidated_valuation?.models_used?.join(', ') || '—'}</div>
-            </div>
-            <div>
-              <div className="text-slate-500">Confidence</div>
-              <div className="font-medium">{report.valuation.details.consolidated_valuation?.confidence || '—'}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="h-16 rounded bg-slate-100" aria-hidden></div>
-        )}
-      </div>
-
-      <div className="card p-5 md:col-span-2">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-medium">Sentiment</h3>
-        <Icons.Sentiment className="w-5 h-5 text-slate-500" aria-hidden />
-        </div>
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <div className="text-slate-500 flex items-center gap-2">
-              News Sentiment
-              {report?.news_sentiment?.latest_date && (
-                <span className="text-xs text-slate-400">
-                  ({new Date(report.news_sentiment.latest_date).toLocaleDateString()})
-                </span>
-              )}
-            </div>
-            <div className="font-medium text-sm mb-2">
-              {report?.news_sentiment?.details?.professional_sentiment || 
-               report?.news_sentiment?.professional_sentiment || '—'}
-            </div>
-            {(() => {
-              const headlineAnalyses = report?.news_sentiment?.details?.headline_analyses || 
-                                     report?.news_sentiment?.headline_analyses || [];
-              const headlines = report?.news_sentiment?.details?.headlines || 
-                              report?.news_sentiment?.headlines || [];
-              const articleCount = report?.news_sentiment?.details?.article_count ?? 
-                                 report?.news_sentiment?.article_count ?? 0;
-              
-              // Show professional format if available, otherwise fallback to basic format
-              if (headlineAnalyses && headlineAnalyses.length > 0) {
-                return (
-                  <div className="space-y-1">
-                    <div className="text-xs font-medium text-slate-600 mb-1">Headlines:</div>
-                    {headlineAnalyses.slice(0, 2).map((analysis: any, idx: number) => (
-                      <div key={idx} className="text-xs text-slate-600">
-                        <div className="line-clamp-1 mb-1">• {analysis.headline}</div>
-                        <div className="text-slate-500 ml-2">
-                          <span className={`font-medium ${
-                            analysis.sentiment === 'Positive' ? 'text-green-600' : 
-                            analysis.sentiment === 'Negative' ? 'text-red-600' : 
-                            'text-slate-600'
-                          }`}>
-                            {analysis.sentiment}
-                          </span>
-                          : {analysis.rationale}
-                        </div>
-                      </div>
-                    ))}
-                    {articleCount > 2 && (
-                      <div className="text-xs text-blue-600 mt-1">
-                        +{articleCount - 2} more articles
-                      </div>
-                    )}
-                  </div>
-                );
-              } else if (headlines && headlines.length > 0) {
-                // Fallback to simple format
-                return (
-                  <div className="mt-2 space-y-1">
-                    {headlines.slice(0, 2).map((headline: string, idx: number) => (
-                      <div key={idx} className="text-xs text-slate-600 line-clamp-2">
-                        • {headline}
-                      </div>
-                    ))}
-                    {articleCount > 2 && (
-                      <div className="text-xs text-blue-600">
-                        +{articleCount - 2} more articles
-                      </div>
-                    )}
-                  </div>
-                );
-              }
-              return null;
-            })()}
-          </div>
-          <div>
-            <div className="text-slate-500">YouTube</div>
-            <div className="font-medium">{report?.youtube_sentiment?.summary || '—'}</div>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }

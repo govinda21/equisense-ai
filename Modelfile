@@ -1,3 +1,0 @@
-FROM /Users/govindak/workspace/EquiSense_AI/fin-llama-33b.Q4_K_M.gguf
-PARAMETER num_ctx 4096
-# Use generate API; no custom template

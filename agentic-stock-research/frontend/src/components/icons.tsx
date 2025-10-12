@@ -8,7 +8,13 @@ import {
   ChatBubbleOvalLeftIcon,
   UserIcon,
   PaperAirplaneIcon,
-  ComputerDesktopIcon
+  ComputerDesktopIcon,
+  ShieldCheckIcon,
+  ExclamationTriangleIcon,
+  DocumentTextIcon,
+  MicrophoneIcon,
+  UserGroupIcon,
+  ChartPieIcon
 } from '@heroicons/react/24/outline'
 
 export const Icons = {
@@ -22,4 +28,11 @@ export const Icons = {
   User: UserIcon,
   Send: PaperAirplaneIcon,
   Bot: ComputerDesktopIcon,
+  Shield: ShieldCheckIcon,
+  AlertTriangle: ExclamationTriangleIcon,
+  DocumentText: DocumentTextIcon,
+  Microphone: MicrophoneIcon,
+  UserGroup: UserGroupIcon,
+  ChartPie: ChartPieIcon,
+  ChartBar: ChartBarIcon,
 }

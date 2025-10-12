@@ -36,7 +36,7 @@ export function useCountries() {
         
         if (isMounted) {
           // Fallback to default countries
-          setCountries(['United States', 'India', 'United Kingdom', 'Canada']);
+          setCountries(['India', 'United States', 'United Kingdom', 'Canada']);
           setError(err instanceof Error ? err.message : 'Failed to fetch countries');
         }
       } finally {

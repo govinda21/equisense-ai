@@ -89,7 +89,7 @@ class DataValidator:
     def validate_country(country: str) -> str:
         """Validate and normalize country name"""
         if not country or not isinstance(country, str):
-            return 'US'  # Default fallback
+            return 'India'  # Default fallback
         
         country = country.strip()
         
@@ -111,8 +111,8 @@ class DataValidator:
         if normalized in DataValidator.VALID_COUNTRIES:
             return normalized
         
-        logger.warning(f"Unknown country {country}, defaulting to US")
-        return 'US'
+        logger.warning(f"Unknown country {country}, defaulting to India")
+        return 'India'
     
     @staticmethod
     def validate_financial_value(value: Any, field_name: str, allow_negative: bool = True) -> Optional[float]:

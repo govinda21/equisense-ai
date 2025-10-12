@@ -1,14 +1,16 @@
-import React from 'react'
+import React, { useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import './index.css'
 import App from './App'
 import { Navbar } from './components/Navbar'
 
-function Root() {
+export function Root() {
+  const [chatOpen, setChatOpen] = useState(false)
+
   return (
     <React.StrictMode>
-      <Navbar />
-      <App />
+      <Navbar chatOpen={chatOpen} onChatToggle={() => setChatOpen(!chatOpen)} />
+      <App chatOpen={chatOpen} />
     </React.StrictMode>
   )
 }

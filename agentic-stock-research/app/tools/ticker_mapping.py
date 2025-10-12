@@ -219,8 +219,8 @@ def map_ticker_to_symbol(ticker: str, country: str = "United States") -> Tuple[s
                 symbol += ex.suffix
             return symbol, ex_code, ex.currency
     
-    # Default to US market
-    return ticker.upper(), "US", "USD"
+    # Default to India market
+    return ticker.upper() + '.NS', "NSE", "INR"
 
 
 def get_currency_symbol(currency: str) -> str:
@@ -274,8 +274,8 @@ def detect_country_from_ticker(ticker: str) -> str:
     if normalized in INDIAN_STOCK_MAPPING:
         return "India"
     
-    # Default to US
-    return "United States"
+    # Default to India
+    return "India"
 
 
 def get_supported_countries() -> List[str]:

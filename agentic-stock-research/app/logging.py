@@ -3,13 +3,42 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict
+from logging.handlers import RotatingFileHandler
 
 import structlog
 
 
 def configure_logging(level: str = "INFO") -> None:
-    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=getattr(logging, level, logging.INFO))
+    # Create logs directory if it doesn't exist
+    log_dir = Path(__file__).resolve().parents[2] / "logs"
+    log_dir.mkdir(exist_ok=True)
+    
+    # Log file path
+    log_file = log_dir / "backend.log"
+    
+    # Configure handlers
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, level, logging.INFO))
+    
+    # File handler with rotation (max 10MB, keep 5 backup files)
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(getattr(logging, level, logging.INFO))
+    
+    # Configure logging with both handlers
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=getattr(logging, level, logging.INFO),
+        handlers=[console_handler, file_handler]
+    )
+    
+    # Configure structlog
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
@@ -22,6 +51,10 @@ def configure_logging(level: str = "INFO") -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+    
+    # Log the configuration
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging configured - Console: {level}, File: {log_file}")
 
 
 def get_logger() -> structlog.stdlib.BoundLogger:
