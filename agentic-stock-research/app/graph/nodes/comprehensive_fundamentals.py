@@ -229,10 +229,10 @@ def _generate_key_insights(
         # Financial health insights
         if basic_fundamentals:
             roe = basic_fundamentals.get("roe", 0) or 0
-            if roe > 0.15:
-                insights.append(f"💪 Strong ROE of {roe:.1%} indicates efficient capital utilization")
-            elif roe < 0.08:
-                insights.append(f"⚠️ Weak ROE of {roe:.1%} suggests capital efficiency concerns")
+            if roe > 15.0:  # ROE is stored as percentage (15.0 not 0.15)
+                insights.append(f"💪 Strong ROE of {roe:.1f}% indicates efficient capital utilization")
+            elif roe < 8.0:  # ROE is stored as percentage
+                insights.append(f"⚠️ Weak ROE of {roe:.1f}% suggests capital efficiency concerns")
             
             debt_equity = basic_fundamentals.get("debtToEquity", 0) or 0
             if debt_equity < 50:
@@ -244,16 +244,16 @@ def _generate_key_insights(
         if "error" not in dcf_valuation:
             margin_of_safety = dcf_valuation.get("margin_of_safety", 0)
             if margin_of_safety > 0.2:
-                insights.append(f"🎯 Attractive valuation with {margin_of_safety:.1%} margin of safety")
+                insights.append(f"🎯 Attractive valuation with {margin_of_safety*100:.1f}% margin of safety")
             elif margin_of_safety < 0:
-                insights.append(f"💸 Currently overvalued by {abs(margin_of_safety):.1%}")
+                insights.append(f"💸 Currently overvalued by {abs(margin_of_safety)*100:.1f}%")
             
             intrinsic_value = dcf_valuation.get("intrinsic_value", 0)
             current_price = dcf_valuation.get("current_price", 0)
             if intrinsic_value and current_price:
                 upside = (intrinsic_value - current_price) / current_price
                 if upside > 0.25:
-                    insights.append(f"🚀 Significant upside potential of {upside:.1%} to intrinsic value")
+                    insights.append(f"🚀 Significant upside potential of {upside*100:.1f}% to intrinsic value")
         
         # Governance insights
         if governance_analysis and "error" not in governance_analysis:

@@ -1,5 +1,5 @@
 """
-Real-time data ingestion and event-driven updates
+Real-time data ingestion and event-driven updates with production WebSocket providers
 """
 from __future__ import annotations
 
@@ -9,11 +9,21 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import os
 
 import httpx
 from asyncio import Queue
 
 logger = logging.getLogger(__name__)
+
+
+class DataProvider(Enum):
+    """Supported real-time data providers"""
+    ALPHA_VANTAGE = "alpha_vantage"
+    POLYGON = "polygon"
+    FINNHUB = "finnhub"
+    IEX_CLOUD = "iex_cloud"
+    YAHOO_FINANCE = "yahoo_finance"
 
 
 class MarketEvent(Enum):
@@ -65,13 +75,46 @@ class RealtimeDataStream:
         self.subscribers: Set[Callable] = set()
         self.event_queue: Queue = Queue()
         
-    async def connect_websocket(self, url: str):
-        """Connect to WebSocket for real-time data"""
+    async def connect_websocket(self, provider: DataProvider = DataProvider.POLYGON):
+        """Connect to WebSocket for real-time data based on provider"""
         try:
             import websockets
+            
+            # Get API keys from environment
+            api_keys = {
+                DataProvider.POLYGON: os.getenv("POLYGON_API_KEY"),
+                DataProvider.FINNHUB: os.getenv("FINNHUB_API_KEY"),
+                DataProvider.ALPHA_VANTAGE: os.getenv("ALPHA_VANTAGE_API_KEY"),
+                DataProvider.IEX_CLOUD: os.getenv("IEX_CLOUD_API_KEY"),
+            }
+            
+            api_key = api_keys.get(provider)
+            if not api_key:
+                logger.warning(f"No API key for {provider.value}, falling back to polling")
+                asyncio.create_task(self._polling_fallback())
+                return
+            
+            # Provider-specific WebSocket URLs
+            ws_urls = {
+                DataProvider.POLYGON: f"wss://socket.polygon.io/stocks",
+                DataProvider.FINNHUB: f"wss://ws.finnhub.io?token={api_key}",
+                DataProvider.ALPHA_VANTAGE: None,  # No WebSocket support
+                DataProvider.IEX_CLOUD: f"wss://ws-api.iexcloud.com/1.0/last?token={api_key}",
+            }
+            
+            url = ws_urls.get(provider)
+            if not url:
+                logger.info(f"{provider.value} doesn't support WebSocket, using polling")
+                asyncio.create_task(self._polling_fallback())
+                return
+            
             self.websocket = await websockets.connect(url)
             self.is_connected = True
-            logger.info(f"Connected to WebSocket for {self.ticker}")
+            self.provider = provider
+            logger.info(f"Connected to {provider.value} WebSocket for {self.ticker}")
+            
+            # Send subscription message based on provider
+            await self._subscribe_to_ticker(provider, api_key)
             
             # Start listening for messages
             asyncio.create_task(self._listen_websocket())
@@ -79,18 +122,107 @@ class RealtimeDataStream:
         except Exception as e:
             logger.error(f"WebSocket connection failed: {e}")
             self.is_connected = False
+            asyncio.create_task(self._polling_fallback())
+    
+    async def _subscribe_to_ticker(self, provider: DataProvider, api_key: str):
+        """Send subscription message to WebSocket"""
+        try:
+            if provider == DataProvider.POLYGON:
+                # Polygon subscription format
+                await self.websocket.send(json.dumps({
+                    "action": "auth",
+                    "params": api_key
+                }))
+                await asyncio.sleep(0.5)
+                await self.websocket.send(json.dumps({
+                    "action": "subscribe",
+                    "params": f"T.{self.ticker}"  # Trade updates
+                }))
+                
+            elif provider == DataProvider.FINNHUB:
+                # Finnhub subscription format
+                await self.websocket.send(json.dumps({
+                    "type": "subscribe",
+                    "symbol": self.ticker
+                }))
+                
+            elif provider == DataProvider.IEX_CLOUD:
+                # IEX Cloud subscription format
+                await self.websocket.send(json.dumps({
+                    "subscribe": [self.ticker]
+                }))
+                
+            logger.info(f"Subscribed to {self.ticker} on {provider.value}")
+            
+        except Exception as e:
+            logger.error(f"Subscription failed: {e}")
     
     async def _listen_websocket(self):
         """Listen for WebSocket messages"""
         try:
             async for message in self.websocket:
                 data = json.loads(message)
-                await self._process_realtime_data(data)
+                
+                # Normalize data based on provider
+                normalized_data = await self._normalize_websocket_data(data)
+                if normalized_data:
+                    await self._process_realtime_data(normalized_data)
+                    
         except Exception as e:
             logger.error(f"WebSocket error: {e}")
             self.is_connected = False
             # Fallback to polling
             asyncio.create_task(self._polling_fallback())
+    
+    async def _normalize_websocket_data(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Normalize WebSocket data from different providers to common format"""
+        try:
+            provider = getattr(self, 'provider', None)
+            
+            if provider == DataProvider.POLYGON:
+                # Polygon format: {"ev":"T","sym":"AAPL","p":150.25,"s":100,"t":1234567890}
+                if data.get("ev") == "T":  # Trade event
+                    return {
+                        "ticker": data.get("sym"),
+                        "price": data.get("p"),
+                        "volume": data.get("s"),
+                        "timestamp": data.get("t"),
+                        "source": "polygon"
+                    }
+                elif data.get("ev") == "status":
+                    logger.debug(f"Polygon status: {data.get('message')}")
+                    return None
+                    
+            elif provider == DataProvider.FINNHUB:
+                # Finnhub format: {"data":[{"p":150.25,"s":"AAPL","t":1234567890,"v":100}],"type":"trade"}
+                if data.get("type") == "trade" and data.get("data"):
+                    trade = data["data"][0]
+                    return {
+                        "ticker": trade.get("s"),
+                        "price": trade.get("p"),
+                        "volume": trade.get("v"),
+                        "timestamp": trade.get("t"),
+                        "source": "finnhub"
+                    }
+                elif data.get("type") == "ping":
+                    # Respond to ping
+                    await self.websocket.send(json.dumps({"type": "pong"}))
+                    return None
+                    
+            elif provider == DataProvider.IEX_CLOUD:
+                # IEX Cloud format: {"symbol":"AAPL","price":150.25,"size":100,"time":1234567890}
+                return {
+                    "ticker": data.get("symbol"),
+                    "price": data.get("price"),
+                    "volume": data.get("size"),
+                    "timestamp": data.get("time"),
+                    "source": "iex_cloud"
+                }
+                
+        except Exception as e:
+            logger.error(f"Data normalization failed: {e}")
+            
+        return None
     
     async def _polling_fallback(self):
         """Fallback to polling if WebSocket fails"""
@@ -111,18 +243,103 @@ class RealtimeDataStream:
                 await asyncio.sleep(10)
     
     async def _fetch_latest_data(self) -> Optional[Dict[str, Any]]:
-        """Fetch latest data via HTTP"""
+        """Fetch latest data via HTTP from multiple providers"""
+        providers = [
+            self._fetch_from_alpha_vantage,
+            self._fetch_from_finnhub,
+            self._fetch_from_yfinance,
+        ]
+        
+        for provider_func in providers:
+            try:
+                data = await provider_func()
+                if data:
+                    return data
+            except Exception as e:
+                logger.debug(f"Provider fetch failed: {e}")
+                continue
+        
+        return None
+    
+    async def _fetch_from_alpha_vantage(self) -> Optional[Dict[str, Any]]:
+        """Fetch from Alpha Vantage API"""
+        api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+        if not api_key:
+            return None
+            
         try:
-            # This would connect to a real-time data provider
-            # For now, using a mock endpoint
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
-                    f"https://api.example.com/quote/{self.ticker}"
+                    f"https://www.alphavantage.co/query",
+                    params={
+                        "function": "GLOBAL_QUOTE",
+                        "symbol": self.ticker,
+                        "apikey": api_key
+                    }
                 )
                 if response.status_code == 200:
-                    return response.json()
+                    data = response.json()
+                    quote = data.get("Global Quote", {})
+                    if quote:
+                        return {
+                            "ticker": self.ticker,
+                            "price": float(quote.get("05. price", 0)),
+                            "volume": int(quote.get("06. volume", 0)),
+                            "timestamp": datetime.utcnow().timestamp(),
+                            "source": "alpha_vantage"
+                        }
         except Exception as e:
-            logger.debug(f"Failed to fetch latest data: {e}")
+            logger.debug(f"Alpha Vantage fetch failed: {e}")
+        
+        return None
+    
+    async def _fetch_from_finnhub(self) -> Optional[Dict[str, Any]]:
+        """Fetch from Finnhub API"""
+        api_key = os.getenv("FINNHUB_API_KEY")
+        if not api_key:
+            return None
+            
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"https://finnhub.io/api/v1/quote",
+                    params={
+                        "symbol": self.ticker,
+                        "token": api_key
+                    }
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return {
+                        "ticker": self.ticker,
+                        "price": data.get("c"),  # current price
+                        "volume": None,  # Finnhub quote doesn't include volume
+                        "timestamp": data.get("t"),
+                        "source": "finnhub"
+                    }
+        except Exception as e:
+            logger.debug(f"Finnhub fetch failed: {e}")
+        
+        return None
+    
+    async def _fetch_from_yfinance(self) -> Optional[Dict[str, Any]]:
+        """Fetch from Yahoo Finance (fallback)"""
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(self.ticker)
+            info = ticker.history(period="1d", interval="1m")
+            
+            if not info.empty:
+                latest = info.iloc[-1]
+                return {
+                    "ticker": self.ticker,
+                    "price": float(latest["Close"]),
+                    "volume": int(latest["Volume"]) if "Volume" in latest else None,
+                    "timestamp": datetime.utcnow().timestamp(),
+                    "source": "yahoo_finance"
+                }
+        except Exception as e:
+            logger.debug(f"Yahoo Finance fetch failed: {e}")
         
         return None
     

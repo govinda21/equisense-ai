@@ -9,6 +9,15 @@ import statistics
 from app.config import AppSettings
 from app.graph.state import ResearchState
 from app.tools.nlp import _ollama_chat
+from app.graph.nodes.synthesis_common import (
+    convert_numpy_types,
+    score_to_action,
+    score_to_letter_grade,
+    score_to_stars,
+    format_currency,
+    format_percentage,
+    safe_get,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -539,7 +548,7 @@ def identify_key_factors(
         negatives.append("High P/E ratio")
     if fund.get("roe") and fund["roe"] > 0.20:
         if is_buy_signal or not is_sell_signal:
-            positives.append(f"Strong ROE of {fund['roe']*100:.1f}%")
+            positives.append(f"Strong ROE of {fund['roe']:.1f}%")
     if fund.get("debtToEquity") and fund["debtToEquity"] > 2:
         negatives.append("High leverage")
     

@@ -1,67 +1,62 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-.env
-.venv/
-venv/
-ENV/
-env/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
 
 # Build artifacts
-build/
-dist/
-*.egg-info/
-.eggs/
-.dist/
-
+# Cache
 # Databases
+# Generated files
+# IDE
+# Logs
+# Node
+# OS
+# Playwright
+# Python
+# Reports
+# Testing
 *.db
+*.egg-info/
+*.log
+*.pyc
+*.pyd
+*.pyo
 *.sqlite
 *.sqlite3
-app.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
 *.swo
+*.swp
 *~
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Logs
-*.log
-backend.log
-logs/
-
-# Cache
+.Python
 .cache/
-.mypy_cache/
+.coverage
+.dist/
 .dmypy.json
-dmypy.json
-
-# Playwright
+.eggs/
+.env
+.idea/
+.mypy_cache/
 .playwright/
-
-# Node
+.pytest_cache/
+.tox/
+.venv/
+.vscode/
+ENV/
+Modelfile
+Thumbs.db
+__pycache__/
+app.db
+backend.log
+build/
+dist/
+dmypy.json
+docs/graph_diagram.png
+env/
+frontend.log
+htmlcov/
+logs/
 node_modules/
 package-lock.json
-
-# Reports
 reports/
-
-# Generated files
-docs/graph_diagram.png
 response.txt
-Modelfile
+venv/
+
+# Model files (download from HuggingFace if needed)
+models/
+agentic-stock-research/models/

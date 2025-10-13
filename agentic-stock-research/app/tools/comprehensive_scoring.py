@@ -190,72 +190,94 @@ class ComprehensiveScoringEngine:
             # Scoring logic
             score_components = {}
             
-            # ROE scoring (0-25 points)
-            if roe >= 0.20:  # >20% ROE
+            # ROE scoring (0-25 points) - ROE stored as percentage
+            if roe >= 20.0:  # >20% ROE
                 score_components["roe"] = 25
-            elif roe >= 0.15:  # 15-20% ROE
+            elif roe >= 15.0:  # 15-20% ROE
                 score_components["roe"] = 20
-            elif roe >= 0.12:  # 12-15% ROE
+            elif roe >= 12.0:  # 12-15% ROE
                 score_components["roe"] = 15
-            elif roe >= 0.08:  # 8-12% ROE
+            elif roe >= 8.0:  # 8-12% ROE
                 score_components["roe"] = 10
             else:
                 score_components["roe"] = 5
             
-            # ROIC scoring (0-20 points)
-            if roic >= 0.15:
+            # ROIC scoring (0-20 points) - ROIC stored as percentage
+            if roic >= 15.0:
                 score_components["roic"] = 20
-            elif roic >= 0.12:
+            elif roic >= 12.0:
                 score_components["roic"] = 15
-            elif roic >= 0.08:
+            elif roic >= 8.0:
                 score_components["roic"] = 10
             else:
                 score_components["roic"] = 5
             
             # Debt management (0-20 points)
-            if debt_to_equity <= 30:  # Low leverage
-                score_components["leverage"] = 20
-            elif debt_to_equity <= 60:  # Moderate leverage
-                score_components["leverage"] = 15
-            elif debt_to_equity <= 100:  # High but manageable
-                score_components["leverage"] = 10
-            else:  # Very high leverage
-                score_components["leverage"] = 5
+            # Banks naturally have high D/E (deposits are liabilities), so adjust thresholds
+            sector = fundamentals.get("sector", "")
+            is_financial = "Financial" in sector or "Bank" in sector
+            logger.info(f"Sector for {ticker}: '{sector}', is_financial={is_financial}, D/E={debt_to_equity:.1f}%")
+            
+            if is_financial:
+                # Financial institutions: Higher thresholds (D/E of 500-1000% is normal)
+                if debt_to_equity <= 400:  # Conservative for a bank
+                    score_components["leverage"] = 20
+                elif debt_to_equity <= 700:  # Typical bank leverage
+                    score_components["leverage"] = 15
+                elif debt_to_equity <= 1000:  # High but acceptable for banks
+                    score_components["leverage"] = 10
+                else:  # Very high even for a bank
+                    score_components["leverage"] = 5
+            else:
+                # Non-financial: Traditional D/E thresholds
+                if debt_to_equity <= 30:  # Low leverage
+                    score_components["leverage"] = 20
+                elif debt_to_equity <= 60:  # Moderate leverage
+                    score_components["leverage"] = 15
+                elif debt_to_equity <= 100:  # High but manageable
+                    score_components["leverage"] = 10
+                else:  # Very high leverage
+                    score_components["leverage"] = 5
             
             # Interest coverage (0-15 points)
-            if interest_coverage >= 5:
+            # Handle None or 0 values (common for banks where interest expense may not be reported traditionally)
+            if interest_coverage is None or interest_coverage == 0:
+                score_components["interest_coverage"] = 10  # Neutral score for missing/not-applicable data
+            elif interest_coverage >= 5:
                 score_components["interest_coverage"] = 15
             elif interest_coverage >= 3:
                 score_components["interest_coverage"] = 12
             elif interest_coverage >= 2:
                 score_components["interest_coverage"] = 8
+            elif interest_coverage < 1:
+                score_components["interest_coverage"] = 2  # Critical distress signal
             else:
-                score_components["interest_coverage"] = 3
+                score_components["interest_coverage"] = 5
             
-            # FCF yield (0-10 points)
-            if fcf_yield >= 0.08:  # >8% FCF yield
+            # FCF yield (0-10 points) - FCF yield stored as percentage
+            if fcf_yield >= 8.0:  # >8% FCF yield
                 score_components["fcf_yield"] = 10
-            elif fcf_yield >= 0.05:
+            elif fcf_yield >= 5.0:
                 score_components["fcf_yield"] = 8
-            elif fcf_yield >= 0.02:
+            elif fcf_yield >= 2.0:
                 score_components["fcf_yield"] = 5
             else:
                 score_components["fcf_yield"] = 2
             
-            # Margins (0-10 points)
+            # Margins (0-10 points) - Margins stored as percentage
             margin_score = 0
-            if operating_margins >= 0.20:
+            if operating_margins >= 20.0:
                 margin_score += 5
-            elif operating_margins >= 0.15:
+            elif operating_margins >= 15.0:
                 margin_score += 4
-            elif operating_margins >= 0.10:
+            elif operating_margins >= 10.0:
                 margin_score += 3
             
-            if gross_margins >= 0.50:
+            if gross_margins >= 50.0:
                 margin_score += 5
-            elif gross_margins >= 0.30:
+            elif gross_margins >= 30.0:
                 margin_score += 3
-            elif gross_margins >= 0.20:
+            elif gross_margins >= 20.0:
                 margin_score += 2
             
             score_components["margins"] = margin_score
@@ -266,23 +288,34 @@ class ComprehensiveScoringEngine:
             positive_factors = []
             negative_factors = []
             
-            if roe >= 0.15:
-                positive_factors.append(f"Strong ROE of {roe:.1%}")
-            elif roe < 0.08:
-                negative_factors.append(f"Weak ROE of {roe:.1%}")
+            if roe >= 15.0:  # ROE stored as percentage
+                positive_factors.append(f"Strong ROE of {roe:.1f}%")
+            elif roe < 8.0 and roe > 0:  # ROE stored as percentage, ignore if 0 (data issue)
+                negative_factors.append(f"Weak ROE of {roe:.1f}%")
             
-            if debt_to_equity <= 50:
-                positive_factors.append(f"Conservative leverage (D/E: {debt_to_equity:.1f}%)")
-            elif debt_to_equity > 100:
-                negative_factors.append(f"High leverage (D/E: {debt_to_equity:.1f}%)")
+            # Adjust D/E messaging based on sector
+            if is_financial:
+                # Banks: D/E of 600-700% is typical, don't flag as risk unless extreme
+                if debt_to_equity <= 500:
+                    positive_factors.append(f"Below-average leverage for bank (D/E: {debt_to_equity:.1f}%)")
+                elif debt_to_equity > 1000:
+                    negative_factors.append(f"High leverage even for bank (D/E: {debt_to_equity:.1f}%)")
+            else:
+                # Non-financial: Traditional thresholds
+                if debt_to_equity <= 50:
+                    positive_factors.append(f"Conservative leverage (D/E: {debt_to_equity:.1f}%)")
+                elif debt_to_equity > 100:
+                    negative_factors.append(f"High leverage (D/E: {debt_to_equity:.1f}%)")
             
-            if interest_coverage >= 3:
-                positive_factors.append(f"Adequate interest coverage ({interest_coverage:.1f}x)")
-            elif interest_coverage < 2:
-                negative_factors.append(f"Poor interest coverage ({interest_coverage:.1f}x)")
+            # Only report interest coverage if meaningful (not None or 0)
+            if interest_coverage is not None and interest_coverage > 0:
+                if interest_coverage >= 3:
+                    positive_factors.append(f"Adequate interest coverage ({interest_coverage:.1f}x)")
+                elif interest_coverage < 2:
+                    negative_factors.append(f"Poor interest coverage ({interest_coverage:.1f}x)")
             
-            if fcf_yield >= 0.05:
-                positive_factors.append(f"Good FCF yield ({fcf_yield:.1%})")
+            if fcf_yield >= 5.0:  # FCF yield stored as percentage
+                positive_factors.append(f"Good FCF yield ({fcf_yield:.1f}%)")
             
             # Determine data quality
             data_quality = "High" if len([x for x in [roe, roic, debt_to_equity] if x != 0]) >= 2 else "Medium"
@@ -392,9 +425,9 @@ class ComprehensiveScoringEngine:
             if "error" not in dcf_result:
                 mos = dcf_result.get("margin_of_safety", 0)
                 if mos >= 0.2:
-                    positive_factors.append(f"Strong margin of safety ({mos:.1%})")
+                    positive_factors.append(f"Strong margin of safety ({mos*100:.1f}%)")
                 elif mos < 0:
-                    negative_factors.append(f"Trading above intrinsic value (MoS: {mos:.1%})")
+                    negative_factors.append(f"Trading above intrinsic value (MoS: {mos*100:.1f}%)")
             
             if pe > 0 and pe <= 15:
                 positive_factors.append(f"Attractive P/E ratio ({pe:.1f})")
@@ -496,36 +529,36 @@ class ComprehensiveScoringEngine:
             
             score_components = {}
             
-            # Revenue growth scoring (0-40 points)
-            if revenue_growth >= 0.25:  # >25% growth
+            # Revenue growth scoring (0-40 points) - Stored as percentage
+            if revenue_growth >= 25.0:  # >25% growth
                 score_components["revenue_growth"] = 40
-            elif revenue_growth >= 0.15:  # 15-25% growth
+            elif revenue_growth >= 15.0:  # 15-25% growth
                 score_components["revenue_growth"] = 30
-            elif revenue_growth >= 0.10:  # 10-15% growth
+            elif revenue_growth >= 10.0:  # 10-15% growth
                 score_components["revenue_growth"] = 25
-            elif revenue_growth >= 0.05:  # 5-10% growth
+            elif revenue_growth >= 5.0:  # 5-10% growth
                 score_components["revenue_growth"] = 15
             elif revenue_growth >= 0:     # 0-5% growth
                 score_components["revenue_growth"] = 10
             else:  # Negative growth
                 score_components["revenue_growth"] = 5
             
-            # Margin expansion potential (0-30 points)
-            if operating_margins >= 0.20:
+            # Margin expansion potential (0-30 points) - Stored as percentage
+            if operating_margins >= 20.0:
                 score_components["margins"] = 30
-            elif operating_margins >= 0.15:
+            elif operating_margins >= 15.0:
                 score_components["margins"] = 25
-            elif operating_margins >= 0.10:
+            elif operating_margins >= 10.0:
                 score_components["margins"] = 20
             else:
                 score_components["margins"] = 15
             
-            # ROE sustainability (0-30 points)
-            if roe >= 0.20:
+            # ROE sustainability (0-30 points) - Stored as percentage
+            if roe >= 20.0:
                 score_components["roe_sustainability"] = 30
-            elif roe >= 0.15:
+            elif roe >= 15.0:
                 score_components["roe_sustainability"] = 25
-            elif roe >= 0.12:
+            elif roe >= 12.0:
                 score_components["roe_sustainability"] = 20
             else:
                 score_components["roe_sustainability"] = 15
@@ -536,15 +569,15 @@ class ComprehensiveScoringEngine:
             positive_factors = []
             negative_factors = []
             
-            if revenue_growth >= 0.15:
-                positive_factors.append(f"Strong revenue growth ({revenue_growth:.1%})")
+            if revenue_growth >= 15.0:  # Stored as percentage
+                positive_factors.append(f"Strong revenue growth ({revenue_growth:.1f}%)")
             elif revenue_growth < 0:
-                negative_factors.append(f"Revenue decline ({revenue_growth:.1%})")
+                negative_factors.append(f"Revenue decline ({revenue_growth:.1f}%)")
             
-            if operating_margins >= 0.15:
-                positive_factors.append(f"Healthy operating margins ({operating_margins:.1%})")
-            elif operating_margins < 0.05:
-                negative_factors.append(f"Weak operating margins ({operating_margins:.1%})")
+            if operating_margins >= 15.0:  # Stored as percentage
+                positive_factors.append(f"Healthy operating margins ({operating_margins:.1f}%)")
+            elif operating_margins < 5.0:  # Stored as percentage
+                negative_factors.append(f"Weak operating margins ({operating_margins:.1f}%)")
             
             return PillarScore(
                 score=min(100.0, total_score),

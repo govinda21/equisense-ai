@@ -2,30 +2,26 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
 
 from app.config import AppSettings
 from app.graph.state import ResearchState
+from app.graph.nodes.synthesis_common import (
+    convert_numpy_types,
+    score_to_action as _score_to_action,
+    score_to_letter_grade as _score_to_letter_grade,
+    score_to_stars as _score_to_stars,
+    format_currency,
+    format_percentage,
+    safe_get,
+)
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def _score_to_action(score: float) -> str:
-    """Convert score to professional investment recommendation"""
-    if score >= 0.85:
-        return "Strong Buy"
-    elif score >= 0.70:
-        return "Buy"
-    elif score >= 0.55:
-        return "Hold"
-    elif score >= 0.40:
-        return "Sell"
-    else:
-        return "Strong Sell"
-
-
-def _score_to_letter_grade(score: float) -> str:
-    """Convert numeric score to letter grade rating"""
+def _score_to_letter_grade_old(score: float) -> str:
+    """Convert numeric score to letter grade rating (OLD - keeping for compatibility)"""
     if score >= 0.93:
         return "A+"
     elif score >= 0.87:
@@ -441,19 +437,19 @@ def _build_latest_performance_summary(fund: dict, tech: dict, news: dict, analys
     
     if revenue_growth is not None:
         if revenue_growth > 0.15:
-            parts.append(f"strong revenue growth of {revenue_growth*100:.1f}%")
+            parts.append(f"strong revenue growth of {revenue_growth:.1f}%")
         elif revenue_growth > 0:
-            parts.append(f"revenue growth of {revenue_growth*100:.1f}%")
+            parts.append(f"revenue growth of {revenue_growth:.1f}%")
         else:
-            parts.append(f"revenue contraction of {abs(revenue_growth)*100:.1f}%")
+            parts.append(f"revenue contraction of {abs(revenue_growth):.1f}%")
     
     if earnings_growth is not None:
         if earnings_growth > 0.20:
-            parts.append(f"robust earnings growth of {earnings_growth*100:.1f}%")
+            parts.append(f"robust earnings growth of {earnings_growth:.1f}%")
         elif earnings_growth > 0:
-            parts.append(f"earnings growth of {earnings_growth*100:.1f}%")
+            parts.append(f"earnings growth of {earnings_growth:.1f}%")
         else:
-            parts.append(f"earnings decline of {abs(earnings_growth)*100:.1f}%")
+            parts.append(f"earnings decline of {abs(earnings_growth):.1f}%")
     
     # Profitability
     operating_margins = fund.get("operating_margins") or fund.get("operatingMargins")
@@ -508,7 +504,7 @@ def _identify_key_trends(growth: dict, sector_macro: dict, tech: dict, fund: dic
     # Profitability trends
     roe = fund.get("roe") or fund.get("returnOnEquity")
     if roe and roe > 0.15:
-        trends.append(f"Strong ROE of {roe*100:.1f}% indicating efficient capital utilization")
+        trends.append(f"Strong ROE of {roe:.1f}% indicating efficient capital utilization")
     
     return trends[:5] if trends else ["Market dynamics under continuous assessment"]
 
@@ -538,7 +534,7 @@ def _identify_growth_drivers(growth: dict, strategic_conviction: dict, fund: dic
     # Revenue growth as a driver
     revenue_growth = fund.get("revenue_growth") or fund.get("revenueGrowth")
     if revenue_growth and revenue_growth > 0.15:
-        drivers.append(f"Sustained revenue growth momentum ({revenue_growth*100:.1f}% YoY)")
+        drivers.append(f"Sustained revenue growth momentum ({revenue_growth:.1f}% YoY)")
     
     # R&D and innovation
     if fund.get("rd_intensity") and fund["rd_intensity"] > 0.10:
@@ -632,7 +628,7 @@ def _build_quantitative_evidence(fund: dict, cashflow: dict, valuation: dict, dc
     # Profitability metrics
     if fund.get("roe") or fund.get("returnOnEquity"):
         roe = fund.get("roe") or fund.get("returnOnEquity")
-        evidence["roe"] = f"{roe*100:.1f}%"
+        evidence["roe"] = f"{roe:.1f}%"
     
     if fund.get("operating_margins") or fund.get("operatingMargins"):
         om = fund.get("operating_margins") or fund.get("operatingMargins")
@@ -641,7 +637,7 @@ def _build_quantitative_evidence(fund: dict, cashflow: dict, valuation: dict, dc
     # Growth metrics
     if fund.get("revenue_growth") or fund.get("revenueGrowth"):
         rg = fund.get("revenue_growth") or fund.get("revenueGrowth")
-        evidence["revenue_growth"] = f"{rg*100:.1f}%"
+        evidence["revenue_growth"] = f"{rg:.1f}%"
     
     # Cash flow metrics
     if cashflow.get("fcf_yield"):
@@ -672,7 +668,7 @@ def _build_key_ratios_summary(fund: dict, valuation: dict) -> str:
     # Profitability ratios
     roe = fund.get("roe") or fund.get("returnOnEquity")
     if roe:
-        parts.append(f"ROE of {roe*100:.1f}%")
+        parts.append(f"ROE of {roe:.1f}%")
     
     # Efficiency ratios
     asset_turnover = fund.get("asset_turnover") or fund.get("assetTurnover")
@@ -1382,5 +1378,9 @@ RETURN: [X.X]%"""
                     "price_target_source": senior_recommendation["price_target_source"],
                     "valuation_benchmark": senior_recommendation["valuation_benchmark"]
     }
+    
+    # Convert all numpy types to Python native types for Pydantic serialization
+    state["final_output"] = convert_numpy_types(state["final_output"])
+    
     state.setdefault("confidences", {})["synthesis"] = 0.9
     return state

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse, JSONResponse
+from fastapi.responses import ORJSONResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
@@ -234,6 +235,59 @@ def create_app() -> FastAPI:
             return out
         except Exception as e:
             logger.exception("analyze_failed", tickers=req.tickers)
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.post("/api/generate-pdf")
+    @maybe_observe()
+    async def generate_pdf(req: AnalysisRequest, settings: AppSettings = Depends(get_settings)) -> Any:
+        """
+        Generate a PDF report for analyzed ticker(s)
+        """
+        try:
+            from app.reporting.pdf_generator import generate_pdf_report
+            
+            logger.info("pdf_generation_started", tickers=req.tickers)
+            
+            # First, run analysis to get report data
+            graph = build_research_graph(settings)
+            state = await graph.ainvoke({"request": req, "raw_search_data": {}})
+            analysis = state.get("analysis", {})
+            
+            if not analysis or "tickers" not in analysis:
+                raise HTTPException(status_code=400, detail="Analysis failed - no data available")
+            
+            reports = analysis.get("reports", [])
+            if not reports:
+                raise HTTPException(status_code=400, detail="No reports generated")
+            
+            # Generate PDF for the first report (or combine if multiple)
+            report_data = reports[0]
+            
+            # Generate PDF
+            pdf_buffer = generate_pdf_report(report_data)
+            
+            # Get ticker for filename
+            ticker = report_data.get('ticker', 'report')
+            filename = f"{ticker}_equity_research_{datetime.now().strftime('%Y%m%d')}.pdf"
+            
+            logger.info("pdf_generated", ticker=ticker, filename=filename)
+            
+            return StreamingResponse(
+                pdf_buffer,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}"
+                }
+            )
+            
+        except ImportError as e:
+            logger.error("pdf_generation_failed", error=str(e))
+            return JSONResponse(
+                status_code=501,
+                content={"error": "PDF generation not available. Install reportlab: pip install reportlab"}
+            )
+        except Exception as e:
+            logger.exception("pdf_generation_failed", tickers=req.tickers)
             return JSONResponse(status_code=500, content={"error": str(e)})
 
     @app.post("/api/chat")

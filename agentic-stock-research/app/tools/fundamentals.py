@@ -104,7 +104,13 @@ def _compute_from_statements(ticker: str, market_cap: Optional[float]) -> Dict[s
         # Interest coverage = EBIT or Operating Income / Interest Expense
         ebit_fb = _get_last_value(is_df, ["Ebit", "EBIT", "Operating Income"]) or None
         interest_fb = _get_last_value(is_df, ["Interest Expense", "InterestExpense"]) or None
-        out["interest_coverage"] = (ebit_fb / abs(interest_fb)) if ebit_fb and interest_fb else None
+        # Handle both positive and negative interest expense values, ensure non-zero denominator
+        if ebit_fb is not None and interest_fb is not None and interest_fb != 0:
+            out["interest_coverage"] = ebit_fb / abs(interest_fb)
+        else:
+            out["interest_coverage"] = None
+            if ebit_fb and not interest_fb:
+                logger.info(f"Interest coverage: EBIT={ebit_fb:,.0f} available but no Interest Expense for {ticker}")
 
         # ROIC ≈ NOPAT / Invested Capital
         operating_income = _get_last_value(is_df, ["Operating Income"]) or ebit_fb
@@ -143,8 +149,43 @@ def _compute_from_statements(ticker: str, market_cap: Optional[float]) -> Dict[s
         ])
         out["fcf_yield"] = ((ocf_fb + capex_fb) / market_cap) if isinstance(ocf_fb, (int, float)) and isinstance(capex_fb, (int, float)) and isinstance(market_cap, (int, float)) and market_cap else None
 
+        # Debt to Equity ratio fallback
+        # For banks: Use Total Liabilities / Equity
+        # For non-banks: Use Total Debt / Equity
+        debt_to_equity_fb = None
+        if equity_last is not None and equity_last != 0:
+            # Check balance sheet fields for debugging
+            total_liabilities = _get_last_value(bs_df, ["Total Liabilities Net Minority Interest", "Total Liabilities", "TotalLiabilitiesNetMinorityInterest"])
+            
+            # Banks: use Total Liabilities (includes deposits)
+            # Rule: if Total Liabilities > 5x Equity, likely a bank/financial institution
+            if total_liabilities is not None and total_debt_fb is not None:
+                liab_to_equity_ratio = total_liabilities / equity_last
+                if liab_to_equity_ratio > 5.0:
+                    # This is likely a bank - total liabilities are 5x+ equity
+                    debt_to_equity_fb = (total_liabilities / equity_last) * 100
+                    logger.info(f"Calculated D/E for BANK {ticker}: {debt_to_equity_fb:.2f}% (Total Liabilities: {total_liabilities:,.0f}, Equity: {equity_last:,.0f}, Ratio: {liab_to_equity_ratio:.1f}x)")
+                else:
+                    # Non-financial with both metrics available
+                    debt_to_equity_fb = (total_debt_fb / equity_last) * 100
+                    logger.info(f"Calculated D/E from statements for {ticker}: {debt_to_equity_fb:.2f}% (Debt: {total_debt_fb:,.0f}, Equity: {equity_last:,.0f})")
+            elif total_debt_fb is not None:
+                # Only debt available
+                debt_to_equity_fb = (total_debt_fb / equity_last) * 100
+                logger.info(f"Calculated D/E from statements for {ticker}: {debt_to_equity_fb:.2f}% (Debt: {total_debt_fb:,.0f}, Equity: {equity_last:,.0f})")
+            elif total_liabilities is not None:
+                # Only liabilities available - use it
+                debt_to_equity_fb = (total_liabilities / equity_last) * 100
+                logger.info(f"Calculated D/E using Total Liabilities for {ticker}: {debt_to_equity_fb:.2f}% (Total Liabilities: {total_liabilities:,.0f}, Equity: {equity_last:,.0f})")
+            else:
+                logger.warning(f"Cannot calculate D/E for {ticker}: Debt={total_debt_fb}, Liabilities={total_liabilities}, Equity={equity_last}")
+        else:
+            logger.warning(f"Cannot calculate D/E for {ticker}: Equity={equity_last}")
+        out["debt_to_equity"] = debt_to_equity_fb
+
         return out
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error in _compute_from_statements for {ticker}: {e}")
         return {}
 
 
@@ -301,8 +342,10 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
 
     # Backfill missing metrics using financial statements
     backfill: Dict[str, Optional[float]] = {}
-    if any(v is None for v in [roe, ebitda_margin, interest_coverage, roic, fcf_yield]):
+    if any(v is None for v in [roe, ebitda_margin, interest_coverage, roic, fcf_yield, debt_to_equity]):
+        logger.info(f"Triggering backfill for {ticker}. Missing: ROE={roe is None}, EBITDA={ebitda_margin is None}, IC={interest_coverage is None}, ROIC={roic is None}, FCF={fcf_yield is None}, D/E={debt_to_equity is None}")
         backfill = await asyncio.to_thread(_compute_from_statements, ticker, market_cap)
+        logger.info(f"Backfill complete for {ticker}. Got: {list(backfill.keys())}")
         if roe is None:
             roe = backfill.get("roe", roe)
         if ebitda_margin is None:
@@ -313,8 +356,15 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
             roic = backfill.get("roic", roic)
         if fcf_yield is None:
             fcf_yield = backfill.get("fcf_yield", fcf_yield)
+        if debt_to_equity is None:
+            debt_to_equity = backfill.get("debt_to_equity", debt_to_equity)
 
     return {
+        # Company identification
+        "ticker": ticker,
+        "sector": info.get("sector", ""),
+        "industry": info.get("industry", ""),
+        
         # Legacy PE (for backward compatibility)
         "pe": _safe_float(pe),
         

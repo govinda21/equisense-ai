@@ -6,6 +6,8 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { ToastProvider, useToastHelpers } from './components/Toast'
 import { LoadingOverlay, Spinner, ProgressBar } from './components/LoadingStates'
 import { ErrorState } from './components/ErrorStates'
+import { BulkStockInput } from './components/BulkStockInput'
+import { RankedStockList } from './components/RankedStockList'
 
 // Badge UI is currently unused; keep implementation minimal when needed next.
 
@@ -24,6 +26,7 @@ interface AppProps {
 }
 
 function AppContent({ chatOpen }: AppProps) {
+  const [activeTab, setActiveTab] = useState<'single' | 'bulk'>('single')
   const [tickers, setTickers] = useState('RELIANCE')
   const [country, setCountry] = useState('India')
   const [countries, setCountries] = useState<string[]>(['India', 'United States', 'United Kingdom', 'Canada'])
@@ -35,6 +38,11 @@ function AppContent({ chatOpen }: AppProps) {
   const [data, setData] = useState<any | null>(null)
   const [latency, setLatency] = useState<number | null>(null)
   const [analysisProgress, setAnalysisProgress] = useState(0)
+  
+  // Bulk analysis state
+  const [bulkLoading, setBulkLoading] = useState(false)
+  const [rankedStocks, setRankedStocks] = useState<any[]>([])
+  const [bulkMode, setBulkMode] = useState<'buy' | 'sell'>('buy')
   
   const toast = useToastHelpers()
   const countriesFetched = useRef(false)
@@ -269,21 +277,167 @@ function AppContent({ chatOpen }: AppProps) {
     }
   }
 
+  // Bulk analysis function
+  const handleBulkAnalyze = async (tickerList: string[], mode: 'buy' | 'sell') => {
+    console.log('Starting bulk analysis:', { tickerList, mode })
+    setBulkLoading(true)
+    setBulkMode(mode)
+    setRankedStocks([])
+    
+    try {
+      toast.info(`Analyzing ${tickerList.length} stocks...`, 'Bulk Analysis Started')
+      
+      // Analyze stocks in batches of 5 to avoid overwhelming the server
+      const batchSize = 5
+      const results: any[] = []
+      
+      for (let i = 0; i < tickerList.length; i += batchSize) {
+        const batch = tickerList.slice(i, i + batchSize)
+        console.log(`Processing batch ${Math.floor(i/batchSize) + 1}:`, batch)
+        
+        // Analyze batch
+        const batchPromises = batch.map(async (ticker) => {
+          try {
+            const base = (import.meta as any).env.VITE_API_BASE_URL || 'http://localhost:8000'
+            const res = await fetch(base + '/analyze', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                tickers: [ticker],
+                target_depth: 'quick' // Use quick analysis for bulk
+              }),
+              signal: AbortSignal.timeout(60000) // 60 sec timeout per stock
+            })
+            
+            if (!res.ok) {
+              console.error(`Failed to fetch ${ticker}: ${res.status}`)
+              return null
+            }
+            
+            const data = await res.json()
+            console.log(`Response for ${ticker}:`, data)
+            
+            const report = data.reports?.[0]
+            if (!report) {
+              console.warn(`No report found for ${ticker}`)
+              return null
+            }
+            
+            // Extract key metrics
+            const decision = report.decision || {}
+            const tech = report.technicals?.details || {}
+            const fundamentals = report.fundamentals?.details || {}
+            
+            // Get last price from multiple sources
+            let lastPrice = 0
+            if (tech.closes && tech.closes.length > 0) {
+              lastPrice = tech.closes[tech.closes.length - 1]
+            } else if (fundamentals.current_price) {
+              lastPrice = fundamentals.current_price
+            }
+            
+            const result = {
+              ticker,
+              confidenceScore: Math.round((decision.rating || 2.5) * 20), // Convert 0-5 to 0-100
+              lastPrice,
+              changePercent: tech.close_change_pct || fundamentals.change_pct || 0,
+              sentiment: decision.rating >= 3.5 ? 'bullish' : decision.rating <= 2.5 ? 'bearish' : 'neutral',
+              recommendation: decision.action || 'Hold',
+              marketCap: fundamentals.market_cap,
+              sector: fundamentals.sector || 'Unknown',
+              volatility: tech.volatility || 0,
+              report: report // Store full report for expansion
+            }
+            
+            console.log(`Extracted data for ${ticker}:`, result)
+            return result
+          } catch (err) {
+            console.error(`Failed to analyze ${ticker}:`, err)
+            return null
+          }
+        })
+        
+        const batchResults = await Promise.all(batchPromises)
+        const validResults = batchResults.filter(r => r !== null)
+        console.log(`Batch complete. Valid results:`, validResults)
+        results.push(...validResults)
+        
+        // Update progress
+        toast.info(
+          `Analyzed ${Math.min(i + batchSize, tickerList.length)} of ${tickerList.length} stocks`,
+          'Progress'
+        )
+      }
+      
+      console.log('All batches complete. Total results:', results.length)
+      
+      // Sort by confidence for the selected mode
+      const sorted = results.sort((a, b) => b.confidenceScore - a.confidenceScore)
+      console.log('Sorted results:', sorted)
+      setRankedStocks(sorted)
+      
+      toast.success(
+        `Successfully analyzed ${results.length} of ${tickerList.length} stocks`,
+        'Bulk Analysis Complete'
+      )
+      
+    } catch (err: any) {
+      toast.error(err.message || 'Bulk analysis failed', 'Error')
+    } finally {
+      setBulkLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-blue-50 dark:from-slate-900 dark:to-slate-800">
-      <main className="flex-1 py-8">
-        <div className="container">
+      <main className="flex-1 py-4 sm:py-6 md:py-8">
+        <div className="container px-3 sm:px-4 md:px-6">
 
-          {/* Side-by-side Layout */}
-          <div className="flex gap-6 h-[calc(100vh-180px)]">
+          {/* Side-by-side Layout - Mobile Responsive */}
+          <div className="flex flex-col lg:flex-row gap-4 sm:gap-6 min-h-[calc(100vh-180px)]">
             {/* Main Content Area */}
-            <div className={`transition-all duration-300 space-y-6 overflow-y-auto ${chatOpen ? 'flex-1' : 'w-full'}`}>
-              <section className="card p-6 backdrop-blur bg-white/80 dark:bg-slate-900/80" aria-labelledby="analyze-title">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 id="analyze-title" className="text-lg font-medium">Analyze Stocks</h2>
-                  {latency !== null && <span className="text-xs text-slate-600" aria-live="polite">API latency: {latency} ms</span>}
+            <div className={`transition-all duration-300 space-y-4 sm:space-y-6 overflow-y-auto ${chatOpen ? 'lg:flex-1' : 'w-full'}`}>
+              {/* Tab Navigation */}
+              <div className="card p-2 backdrop-blur bg-white/80">
+                <div className="flex space-x-1">
+                  <button
+                    onClick={() => setActiveTab('single')}
+                    className={`flex-1 px-4 py-3 rounded-lg font-medium transition-all ${
+                      activeTab === 'single'
+                        ? 'bg-blue-600 text-white shadow-lg'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center space-x-2">
+                      <Icons.ChartPie className="w-5 h-5" />
+                      <span>Single Analysis</span>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('bulk')}
+                    className={`flex-1 px-4 py-3 rounded-lg font-medium transition-all ${
+                      activeTab === 'bulk'
+                        ? 'bg-blue-600 text-white shadow-lg'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center space-x-2">
+                      <Icons.List className="w-5 h-5" />
+                      <span>Bulk Ranking</span>
+                    </div>
+                  </button>
                 </div>
-                <form onSubmit={submit} className="grid md:grid-cols-4 gap-6" role="form" aria-describedby={error ? 'form-error' : undefined}>
+              </div>
+
+              {/* Single Analysis Form */}
+              {activeTab === 'single' && (
+                <>
+                  <section className="card p-4 sm:p-6 backdrop-blur bg-white/80 dark:bg-slate-900/80" aria-labelledby="analyze-title">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                      <h2 id="analyze-title" className="text-base sm:text-lg font-medium">Analyze Stocks</h2>
+                      {latency !== null && <span className="text-xs text-slate-600" aria-live="polite">API latency: {latency} ms</span>}
+                    </div>
+                <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6" role="form" aria-describedby={error ? 'form-error' : undefined}>
                   <Field id="country" label="Country" hint="Select the stock market">
                     <select 
                       id="country" 
@@ -386,6 +540,26 @@ function AppContent({ chatOpen }: AppProps) {
                   </ErrorBoundary>
                 ))}
               </LoadingOverlay>
+                </>
+              )}
+
+              {/* Bulk Analysis Tab */}
+              {activeTab === 'bulk' && (
+                <>
+                  <BulkStockInput
+                    onAnalyze={handleBulkAnalyze}
+                    loading={bulkLoading}
+                  />
+                  
+                  {rankedStocks.length > 0 && (
+                    <RankedStockList
+                      stocks={rankedStocks}
+                      mode={bulkMode}
+                      loading={bulkLoading}
+                    />
+                  )}
+                </>
+              )}
             </div>
 
             {/* Chat Panel */}

@@ -682,58 +682,64 @@ class MoneyControlDataSource(DataSource):
                             }
                             data["corporate_actions"].append(action_data)
                 
-                # Extract latest dividend info
-                dividend_section = soup.find('div', class_='dividend_table')
-                if dividend_section:
-                    dividend_text = dividend_section.get_text(strip=True)
-                    # Extract dividend yield if present
-                    import re
-                    div_match = re.search(r'(\d+\.?\d*)%', dividend_text)
-                    if div_match:
-                        data["dividend_yield"] = float(div_match.group(1)) / 100
-                
-                # Extract PE ratio if available
-                pe_span = soup.find('span', string=re.compile('P/E Ratio', re.I))
-                if pe_span:
-                    pe_value = pe_span.find_next('span', class_='value')
-                    if pe_value:
-                        try:
-                            data["pe_ratio"] = float(pe_value.get_text(strip=True).replace(',', ''))
-                        except:
-                            pass
-                
-                # Extract market cap if available
-                mcap_span = soup.find('span', string=re.compile('Market Cap', re.I))
-                if mcap_span:
-                    mcap_value = mcap_span.find_next('span', class_='value')
-                    if mcap_value:
-                        mcap_text = mcap_value.get_text(strip=True)
-                        # Parse "1,50,000 Cr" format
-                        if 'Cr' in mcap_text:
+                # Import re at the top to avoid local variable issues
+                try:
+                    import re as regex_module
+                    
+                    # Extract latest dividend info
+                    dividend_section = soup.find('div', class_='dividend_table')
+                    if dividend_section:
+                        dividend_text = dividend_section.get_text(strip=True)
+                        # Extract dividend yield if present
+                        div_match = regex_module.search(r'(\d+\.?\d*)%', dividend_text)
+                        if div_match:
+                            data["dividend_yield"] = float(div_match.group(1)) / 100
+                    
+                    # Extract PE ratio if available
+                    pe_span = soup.find('span', string=regex_module.compile('P/E Ratio', regex_module.I))
+                    if pe_span:
+                        pe_value = pe_span.find_next('span', class_='value')
+                        if pe_value:
                             try:
-                                num = float(mcap_text.replace('Cr', '').replace(',', '').strip())
-                                data["market_cap"] = num * 10000000  # Crore to actual
-                            except:
-                                pass
-                
-                # Extract 52-week high/low
-                week52_high = soup.find('span', string=re.compile('52.*High', re.I))
-                if week52_high:
-                    high_value = week52_high.find_next('span', class_='value')
-                    if high_value:
-                        try:
-                            data["week_52_high"] = float(high_value.get_text(strip=True).replace(',', ''))
-                        except:
-                            pass
-                
-                week52_low = soup.find('span', string=re.compile('52.*Low', re.I))
-                if week52_low:
-                    low_value = week52_low.find_next('span', class_='value')
-                    if low_value:
-                        try:
-                            data["week_52_low"] = float(low_value.get_text(strip=True).replace(',', ''))
-                        except:
-                            pass
+                                data["pe_ratio"] = float(pe_value.get_text(strip=True).replace(',', ''))
+                            except ValueError as e:
+                                logger.debug(f"Failed to parse PE ratio: {e}")
+                    
+                    # Extract market cap if available
+                    mcap_span = soup.find('span', string=regex_module.compile('Market Cap', regex_module.I))
+                    if mcap_span:
+                        mcap_value = mcap_span.find_next('span', class_='value')
+                        if mcap_value:
+                            mcap_text = mcap_value.get_text(strip=True)
+                            # Parse "1,50,000 Cr" format
+                            if 'Cr' in mcap_text:
+                                try:
+                                    num = float(mcap_text.replace('Cr', '').replace(',', '').strip())
+                                    data["market_cap"] = num * 10000000  # Crore to actual
+                                except ValueError as e:
+                                    logger.debug(f"Failed to parse market cap: {e}")
+                    
+                    # Extract 52-week high/low
+                    week52_high = soup.find('span', string=regex_module.compile('52.*High', regex_module.I))
+                    if week52_high:
+                        high_value = week52_high.find_next('span', class_='value')
+                        if high_value:
+                            try:
+                                data["week_52_high"] = float(high_value.get_text(strip=True).replace(',', ''))
+                            except ValueError as e:
+                                logger.debug(f"Failed to parse 52-week high: {e}")
+                    
+                    week52_low = soup.find('span', string=regex_module.compile('52.*Low', regex_module.I))
+                    if week52_low:
+                        low_value = week52_low.find_next('span', class_='value')
+                        if low_value:
+                            try:
+                                data["week_52_low"] = float(low_value.get_text(strip=True).replace(',', ''))
+                            except ValueError as e:
+                                logger.debug(f"Failed to parse 52-week low: {e}")
+                                
+                except ImportError as e:
+                    logger.error(f"Failed to import regex module: {e}")
                 
                 return data if len(data) > 3 else None  # More than just symbol, source, empty lists
         

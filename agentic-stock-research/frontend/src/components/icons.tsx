@@ -14,7 +14,9 @@ import {
   DocumentTextIcon,
   MicrophoneIcon,
   UserGroupIcon,
-  ChartPieIcon
+  ChartPieIcon,
+  ArrowDownTrayIcon,
+  ListBulletIcon
 } from '@heroicons/react/24/outline'
 
 export const Icons = {
@@ -35,4 +37,6 @@ export const Icons = {
   UserGroup: UserGroupIcon,
   ChartPie: ChartPieIcon,
   ChartBar: ChartBarIcon,
+  Download: ArrowDownTrayIcon,
+  List: ListBulletIcon,
 }

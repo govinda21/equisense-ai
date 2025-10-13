@@ -474,15 +474,35 @@ This project is licensed under the MIT License. See LICENSE file for details.
 
 ---
 
+## 📚 Documentation
+
+For comprehensive documentation, see:
+- **[COMPREHENSIVE_DOCUMENTATION.md](./COMPREHENSIVE_DOCUMENTATION.md)** - Complete guide covering:
+  - Architecture deep-dive
+  - API reference
+  - Data sources
+  - Known issues & solutions
+  - Future roadmap
+  - Troubleshooting
+
+Additional documentation:
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - System architecture details
+- **[DESIGN.md](./DESIGN.md)** - Design decisions and patterns
+- **[SETUP_GUIDE.md](./SETUP_GUIDE.md)** - Detailed setup instructions
+- **[NEXT_STEPS.md](./NEXT_STEPS.md)** - Planned improvements
+- **[FUTURE_INITIATIVES.md](./FUTURE_INITIATIVES.md)** - Long-term roadmap
+
+---
+
 ## 🆘 Support
 
 For issues and questions:
-1. Check the troubleshooting section above
-2. Search existing GitHub issues
+1. Check the [COMPREHENSIVE_DOCUMENTATION.md](./COMPREHENSIVE_DOCUMENTATION.md) troubleshooting section
+2. Review existing GitHub issues
 3. Create a new issue with detailed error logs and system info
 
 **System Requirements:**
 - macOS/Linux (Windows with WSL2)
-- Python 3.11+, Node.js 18+
-- 8GB+ RAM (for Ollama models)
+- Python 3.13+, Node.js 18+
+- 8GB+ RAM (for AI models)
 - 10GB+ free disk space

@@ -19,6 +19,7 @@ from app.tools.sec_edgar import (
     FilingType
 )
 from app.tools.bse_nse_filings import analyze_indian_filings
+from app.utils.retry import retry_async, RetryError
 
 logger = logging.getLogger(__name__)
 
@@ -86,18 +87,30 @@ async def filing_analysis_node(state: ResearchState, settings: AppSettings) -> R
         return state
 
 
+@retry_async(max_retries=3, base_delay=2.0, backoff_factor=2.0, exceptions=(Exception,))
+async def _fetch_sec_filings_with_retry(ticker: str) -> List[Any]:
+    """Fetch SEC filings with retry logic"""
+    return await get_recent_sec_filings(
+        ticker=ticker,
+        filing_types=[FilingType.FORM_10K, FilingType.FORM_10Q, FilingType.FORM_8K],
+        count=2,  # 2 of each type
+        include_content=True
+    )
+
+
 async def _analyze_us_sec_filings(ticker: str, filing_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Analyze SEC filings for US companies"""
+    """Analyze SEC filings for US companies with robust error handling"""
     try:
-        # Get recent 10-K, 10-Q, and 8-K filings
+        # Get recent 10-K, 10-Q, and 8-K filings with retry
         logger.info(f"Fetching recent SEC filings for {ticker}")
         
-        filings = await get_recent_sec_filings(
-            ticker=ticker,
-            filing_types=[FilingType.FORM_10K, FilingType.FORM_10Q, FilingType.FORM_8K],
-            count=2,  # 2 of each type
-            include_content=True
-        )
+        try:
+            filings = await _fetch_sec_filings_with_retry(ticker)
+        except RetryError as e:
+            logger.error(f"Failed to fetch SEC filings after retries for {ticker}: {e}")
+            filing_data["status"] = "fetch_failed"
+            filing_data["error"] = f"All retry attempts exhausted: {str(e)}"
+            return filing_data
         
         if not filings:
             logger.warning(f"No SEC filings found for {ticker}")
@@ -131,10 +144,15 @@ async def _analyze_us_sec_filings(ticker: str, filing_data: Dict[str, Any]) -> D
         if most_recent_quarterly and most_recent_quarterly.key_points:
             filing_data["key_insights"].extend(most_recent_quarterly.key_points[:2])
         
-        # Analyze risk factor changes (compare consecutive 10-Ks)
+        # Analyze risk factor changes (compare consecutive 10-Ks) with timeout protection
         try:
             logger.info(f"Comparing consecutive 10-K filings for {ticker}")
-            comparison = await compare_consecutive_filings(ticker, FilingType.FORM_10K)
+            
+            # Add timeout to prevent hanging
+            comparison = await asyncio.wait_for(
+                compare_consecutive_filings(ticker, FilingType.FORM_10K),
+                timeout=30.0  # 30 second timeout
+            )
             
             if comparison:
                 filing_data["risk_factor_changes"] = comparison.risk_factor_changes
@@ -145,8 +163,12 @@ async def _analyze_us_sec_filings(ticker: str, filing_data: Dict[str, Any]) -> D
                 if comparison.removed_risks:
                     filing_data["removed_risks"] = [r.strip() for r in comparison.removed_risks if r.strip()]
         
+        except asyncio.TimeoutError:
+            logger.warning(f"Filing comparison timed out for {ticker}")
+            filing_data["comparison_status"] = "timeout"
         except Exception as e:
             logger.warning(f"Could not compare filings for {ticker}: {e}")
+            filing_data["comparison_status"] = "failed"
         
         # Extract management commentary from MD&A
         if most_recent_annual and most_recent_annual.md_and_a:
@@ -164,16 +186,36 @@ async def _analyze_us_sec_filings(ticker: str, filing_data: Dict[str, Any]) -> D
         return filing_data
 
 
+@retry_async(max_retries=2, base_delay=3.0, backoff_factor=2.0, exceptions=(Exception,))
+async def _fetch_indian_filings_with_retry(ticker: str, days_back: int = 90) -> Dict[str, Any]:
+    """Fetch Indian filings with retry logic"""
+    return await analyze_indian_filings(ticker, days_back=days_back)
+
+
 async def _analyze_indian_filings(ticker: str, filing_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Analyze Indian regulatory filings (BSE/NSE)"""
+    """Analyze Indian regulatory filings (BSE/NSE) with robust error handling"""
     try:
         # Remove .NS/.BO suffix for analysis
         clean_ticker = ticker.replace('.NS', '').replace('.BO', '')
         
         logger.info(f"Fetching Indian regulatory filings for {clean_ticker}")
         
-        # Get comprehensive Indian filing analysis
-        indian_analysis = await analyze_indian_filings(clean_ticker, days_back=90)
+        # Get comprehensive Indian filing analysis with retry and timeout
+        try:
+            indian_analysis = await asyncio.wait_for(
+                _fetch_indian_filings_with_retry(clean_ticker, days_back=90),
+                timeout=45.0  # 45 second timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Indian filing fetch timed out for {ticker}")
+            filing_data["status"] = "timeout"
+            filing_data["error"] = "Request timed out after 45 seconds"
+            return filing_data
+        except RetryError as e:
+            logger.error(f"Failed to fetch Indian filings after retries for {ticker}: {e}")
+            filing_data["status"] = "fetch_failed"
+            filing_data["error"] = f"All retry attempts exhausted: {str(e)}"
+            return filing_data
         
         if indian_analysis.get("error"):
             logger.warning(f"Indian filing analysis error for {ticker}: {indian_analysis['error']}")

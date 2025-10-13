@@ -25,6 +25,12 @@ from enum import Enum
 
 import aiohttp
 from bs4 import BeautifulSoup
+
+from app.cache.redis_cache import get_cache_manager
+
+# Initialize logger first before any try/except blocks
+logger = logging.getLogger(__name__)
+
 # Optional imports for PDF processing
 try:
     import PyPDF2
@@ -35,10 +41,6 @@ try:
 except ImportError:
     PDF_PROCESSING_AVAILABLE = False
     logger.warning("PDF processing libraries not available. OCR functionality will be disabled.")
-
-from app.cache.redis_cache import get_cache_manager
-
-logger = logging.getLogger(__name__)
 
 
 class FilingType(Enum):
@@ -79,8 +81,14 @@ class BSEFilingAnalyzer:
     
     def __init__(self):
         self.base_url = "https://www.bseindia.com"
-        self.cache = get_cache_manager()
+        self.cache = None  # Will be initialized async
         self.session = None
+    
+    async def _ensure_cache(self):
+        """Lazily initialize cache"""
+        if self.cache is None:
+            self.cache = await get_cache_manager()
+        return self.cache
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session"""
@@ -92,6 +100,12 @@ class BSEFilingAnalyzer:
                 }
             )
         return self.session
+    
+    async def close(self):
+        """Close the aiohttp session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            self.session = None
     
     async def get_company_filings(self, ticker: str, days_back: int = 90) -> List[IndianFiling]:
         """
@@ -107,7 +121,8 @@ class BSEFilingAnalyzer:
         cache_key = f"bse_filings:{ticker}:{days_back}"
         
         # Check cache first
-        cached_result = await self.cache.get(cache_key)
+        cache = await self._ensure_cache()
+        cached_result = await cache.get(cache_key)
         if cached_result:
             logger.info(f"Retrieved BSE filings from cache for {ticker}")
             return [IndianFiling(**filing) for filing in cached_result]
@@ -119,7 +134,8 @@ class BSEFilingAnalyzer:
             filings = await self._fetch_bse_filings(session, ticker, days_back)
             
             # Cache results for 2 hours
-            await self.cache.set(cache_key, [filing.__dict__ for filing in filings], ttl=7200)
+            cache = await self._ensure_cache()
+            await cache.set(cache_key, [filing.__dict__ for filing in filings], ttl=7200)
             
             logger.info(f"Retrieved {len(filings)} BSE filings for {ticker}")
             return filings
@@ -231,8 +247,14 @@ class NSEFilingAnalyzer:
     
     def __init__(self):
         self.base_url = "https://www.nseindia.com"
-        self.cache = get_cache_manager()
+        self.cache = None  # Will be initialized async
         self.session = None
+    
+    async def _ensure_cache(self):
+        """Lazily initialize cache"""
+        if self.cache is None:
+            self.cache = await get_cache_manager()
+        return self.cache
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session"""
@@ -244,6 +266,12 @@ class NSEFilingAnalyzer:
                 }
             )
         return self.session
+    
+    async def close(self):
+        """Close the aiohttp session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            self.session = None
     
     async def get_company_filings(self, ticker: str, days_back: int = 90) -> List[IndianFiling]:
         """
@@ -259,7 +287,8 @@ class NSEFilingAnalyzer:
         cache_key = f"nse_filings:{ticker}:{days_back}"
         
         # Check cache first
-        cached_result = await self.cache.get(cache_key)
+        cache = await self._ensure_cache()
+        cached_result = await cache.get(cache_key)
         if cached_result:
             logger.info(f"Retrieved NSE filings from cache for {ticker}")
             return [IndianFiling(**filing) for filing in cached_result]
@@ -271,7 +300,8 @@ class NSEFilingAnalyzer:
             filings = await self._fetch_nse_filings(session, ticker, days_back)
             
             # Cache results for 2 hours
-            await self.cache.set(cache_key, [filing.__dict__ for filing in filings], ttl=7200)
+            cache = await self._ensure_cache()
+            await cache.set(cache_key, [filing.__dict__ for filing in filings], ttl=7200)
             
             logger.info(f"Retrieved {len(filings)} NSE filings for {ticker}")
             return filings
@@ -384,7 +414,18 @@ class IndianFilingAnalyzer:
     def __init__(self):
         self.bse_analyzer = BSEFilingAnalyzer()
         self.nse_analyzer = NSEFilingAnalyzer()
-        self.cache = get_cache_manager()
+        self.cache = None  # Will be initialized async
+    
+    async def _ensure_cache(self):
+        """Lazily initialize cache"""
+        if self.cache is None:
+            self.cache = await get_cache_manager()
+        return self.cache
+    
+    async def close(self):
+        """Close all analyzer sessions"""
+        await self.bse_analyzer.close()
+        await self.nse_analyzer.close()
     
     async def analyze_company_filings(self, ticker: str, days_back: int = 90) -> Dict[str, Any]:
         """
@@ -400,7 +441,8 @@ class IndianFilingAnalyzer:
         cache_key = f"indian_filing_analysis:{ticker}:{days_back}"
         
         # Check cache first
-        cached_result = await self.cache.get(cache_key)
+        cache = await self._ensure_cache()
+        cached_result = await cache.get(cache_key)
         if cached_result:
             logger.info(f"Retrieved Indian filing analysis from cache for {ticker}")
             return cached_result
@@ -419,7 +461,8 @@ class IndianFilingAnalyzer:
             analysis = await self._analyze_filings(all_filings)
             
             # Cache results for 4 hours
-            await self.cache.set(cache_key, analysis, ttl=14400)
+            cache = await self._ensure_cache()
+            await cache.set(cache_key, analysis, ttl=14400)
             
             logger.info(f"Analyzed {len(all_filings)} Indian filings for {ticker}")
             return analysis
@@ -563,4 +606,8 @@ async def analyze_indian_filings(ticker: str, days_back: int = 90) -> Dict[str, 
         Comprehensive filing analysis
     """
     analyzer = IndianFilingAnalyzer()
-    return await analyzer.analyze_company_filings(ticker, days_back)
+    try:
+        return await analyzer.analyze_company_filings(ticker, days_back)
+    finally:
+        # Ensure sessions are closed
+        await analyzer.close()

@@ -24,25 +24,61 @@ class CacheManager:
     Redis-based cache manager with fallback to in-memory caching
     """
     
-    def __init__(self, redis_url: Optional[str] = None, default_ttl: int = 300):
+    def __init__(
+        self, 
+        redis_url: Optional[str] = None, 
+        default_ttl: int = 300,
+        max_connections: int = 10,
+        socket_timeout: float = 5.0,
+        socket_connect_timeout: float = 5.0
+    ):
+        """
+        Initialize cache manager
+        
+        Args:
+            redis_url: Redis connection URL
+            default_ttl: Default time-to-live for cache entries (seconds)
+            max_connections: Maximum connections in the pool
+            socket_timeout: Socket timeout (seconds)
+            socket_connect_timeout: Socket connect timeout (seconds)
+        """
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379")
         self.default_ttl = default_ttl
+        self.max_connections = max_connections
+        self.socket_timeout = socket_timeout
+        self.socket_connect_timeout = socket_connect_timeout
         self.redis_client: Optional[redis.Redis] = None
         self._memory_cache: dict[str, tuple[Any, datetime]] = {}
         self._use_redis = REDIS_AVAILABLE
         self._connected = False
+        
+        # Connection pool stats
+        self.cache_hits = 0
+        self.cache_misses = 0
     
     async def connect(self) -> bool:
-        """Initialize Redis connection"""
+        """Initialize Redis connection with connection pooling"""
         if not self._use_redis:
             logger.warning("Redis not available, falling back to in-memory cache")
             return False
             
         try:
-            self.redis_client = redis.from_url(self.redis_url, decode_responses=False)
+            # Create connection pool for better performance
+            pool = redis.ConnectionPool.from_url(
+                self.redis_url,
+                max_connections=self.max_connections,
+                socket_timeout=self.socket_timeout,
+                socket_connect_timeout=self.socket_connect_timeout,
+                decode_responses=False
+            )
+            
+            self.redis_client = redis.Redis(connection_pool=pool)
             await self.redis_client.ping()
             self._connected = True
-            logger.info(f"Connected to Redis at {self.redis_url}")
+            logger.info(
+                f"Connected to Redis at {self.redis_url} "
+                f"(pool size: {self.max_connections}, timeout: {self.socket_timeout}s)"
+            )
             return True
         except Exception as e:
             logger.warning(f"Failed to connect to Redis ({e}), using in-memory cache")
@@ -65,20 +101,27 @@ class CacheManager:
         return ":".join(key_parts)
     
     async def get(self, key: str, default: Any = None) -> Any:
-        """Get value from cache"""
+        """Get value from cache with hit/miss tracking"""
         try:
             if self._use_redis and self.redis_client and self._connected:
                 data = await self.redis_client.get(key)
                 if data:
+                    self.cache_hits += 1
                     return pickle.loads(data)
+                else:
+                    self.cache_misses += 1
             else:
                 # In-memory fallback
                 if key in self._memory_cache:
                     value, expiry = self._memory_cache[key]
                     if datetime.now() < expiry:
+                        self.cache_hits += 1
                         return value
                     else:
                         del self._memory_cache[key]
+                        self.cache_misses += 1
+                else:
+                    self.cache_misses += 1
             
             return default
         except Exception as e:
@@ -179,6 +222,31 @@ class CacheManager:
         """Cache news data (10 min TTL)"""
         key = self._make_key("news", ticker)
         return await self.set(key, data, ttl)
+    
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Get cache statistics"""
+        total_requests = self.cache_hits + self.cache_misses
+        hit_rate = (self.cache_hits / total_requests * 100) if total_requests > 0 else 0
+        
+        stats = {
+            "cache_type": "redis" if (self._use_redis and self._connected) else "in_memory",
+            "connected": self._connected,
+            "hits": self.cache_hits,
+            "misses": self.cache_misses,
+            "total_requests": total_requests,
+            "hit_rate": round(hit_rate, 2),
+        }
+        
+        if self._use_redis and self.redis_client:
+            stats["connection_pool"] = {
+                "max_connections": self.max_connections,
+                "socket_timeout": self.socket_timeout
+            }
+        
+        if not self._use_redis:
+            stats["memory_cache_size"] = len(self._memory_cache)
+        
+        return stats
 
 
 # Global cache instance
