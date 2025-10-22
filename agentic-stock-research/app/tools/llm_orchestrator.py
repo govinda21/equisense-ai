@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -168,7 +169,7 @@ class OpenAILLM(LLMProvider):
     
     def __init__(self, model: str = "gpt-4o-mini", api_key: Optional[str] = None):
         self.model = model
-        self.api_key = api_key
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = "https://api.openai.com/v1"
     
     async def generate(self, task: LLMTask) -> LLMResponse:
@@ -246,7 +247,7 @@ class AnthropicLLM(LLMProvider):
     
     def __init__(self, model: str = "claude-3-5-sonnet-20241022", api_key: Optional[str] = None):
         self.model = model
-        self.api_key = api_key
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         self.base_url = "https://api.anthropic.com/v1"
     
     async def generate(self, task: LLMTask) -> LLMResponse:

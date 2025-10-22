@@ -105,6 +105,8 @@ class TickerReport(BaseModel):
     growth_prospects: SectionScore
     valuation: SectionScore
     strategic_conviction: Optional[SectionScore] = None  # NEW: Strategic conviction analysis
+    earnings_call_analysis: Optional[Dict[str, Any]] = None  # NEW: Earnings call analysis
+    sector_rotation: Optional[SectionScore] = None  # NEW: Sector rotation analysis
     comprehensive_fundamentals: Optional[ComprehensiveFundamentals] = None
     decision: Decision
 

@@ -730,7 +730,7 @@ def create_comparative_analysis(reports: List[Dict[str, Any]]) -> Dict[str, Any]
             "sector": report["metadata"]["sector"],
             "pe": report["fundamentals"]["details"].get("pe"),
             "roe": report["fundamentals"]["details"].get("roe"),
-            "growth": report["growth_prospects"]["details"].get("growth_outlook", {}).get("overall_outlook"),
+            "growth": report["growth_prospects"].get("growth_outlook", {}).get("overall_outlook"),
             "valuation_upside": report["valuation"]["details"].get("consolidated_valuation", {}).get("upside_downside_pct")
         })
     

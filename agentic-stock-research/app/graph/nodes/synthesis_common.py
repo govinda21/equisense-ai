@@ -32,6 +32,60 @@ def convert_numpy_types(obj: Any) -> Any:
     return obj
 
 
+def score_to_action_with_conviction(score: float, conviction_level: str = "Medium Conviction") -> str:
+    """
+    Convert numeric score to investment recommendation with conviction-adjusted thresholds
+    
+    Args:
+        score: Confidence score (0.0 to 1.0)
+        conviction_level: Strategic conviction level
+        
+    Returns:
+        Investment action recommendation
+    """
+    # Define base thresholds
+    base_thresholds = {
+        "Strong Buy": 0.85,
+        "Buy": 0.70,
+        "Hold": 0.55,
+        "Weak Hold": 0.40,
+        "Sell": 0.0
+    }
+    
+    # Conviction adjustments to thresholds
+    conviction_adjustments = {
+        "High Conviction": -0.15,    # Lower thresholds (easier to achieve Buy/Strong Buy)
+        "Medium Conviction": 0.0,    # No adjustment (neutral)
+        "Low Conviction": +0.10,     # Higher thresholds (harder to Buy)
+        "No Investment": +0.25       # Much higher thresholds (significantly harder to Buy)
+    }
+    
+    adjustment = conviction_adjustments.get(conviction_level, 0.0)
+    
+    # Apply adjustment to thresholds
+    # For "No Investment": RAISE thresholds (make it harder to achieve Buy)
+    # For "High Conviction": LOWER thresholds (make it easier to achieve Buy)
+    adjusted_thresholds = {
+        "Strong Buy": base_thresholds["Strong Buy"] + adjustment,  # +0.25 for "No Investment" = harder
+        "Buy": base_thresholds["Buy"] + adjustment,                # +0.25 for "No Investment" = harder
+        "Hold": base_thresholds["Hold"] + adjustment,               # +0.25 for "No Investment" = harder
+        "Weak Hold": base_thresholds["Weak Hold"] + adjustment,     # +0.25 for "No Investment" = harder
+        "Sell": base_thresholds["Sell"]
+    }
+    
+    # Determine action based on adjusted thresholds
+    if score >= adjusted_thresholds["Strong Buy"]:
+        return "Strong Buy"
+    elif score >= adjusted_thresholds["Buy"]:
+        return "Buy"
+    elif score >= adjusted_thresholds["Hold"]:
+        return "Hold"
+    elif score >= adjusted_thresholds["Weak Hold"]:
+        return "Weak Hold"
+    else:
+        return "Sell"
+
+
 def score_to_action(score: float) -> str:
     """
     Convert numeric score to professional investment recommendation

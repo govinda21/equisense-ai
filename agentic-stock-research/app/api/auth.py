@@ -1,440 +1,255 @@
-"""
-Security and authentication API endpoints
-"""
+# Authentication API Endpoints
 
-import logging
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, Request, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
-import secrets
+from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi.security import HTTPBearer
+from pydantic import BaseModel
+from typing import Optional, Dict, Any, List
+from datetime import datetime
 
-from app.security.auth import (
-    get_security_manager, SecurityManager, User, UserRole, Permission,
-    AuditLog
+from app.auth.user_manager import (
+    get_user_manager, get_auth_manager, get_current_user, get_current_user_optional,
+    register_user, login_user, logout_user, User, UserPreferences
 )
 
-logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
+router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer()
 
-
-# Pydantic models for API requests/responses
-class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
-    email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
-    password: str = Field(..., min_length=8)
-    roles: List[str] = Field(default_factory=lambda: ["viewer"])
-
-
-class UserLogin(BaseModel):
+# Pydantic models for request/response
+class UserRegister(BaseModel):
+    email: str
     username: str
+    full_name: str
     password: str
 
+class UserLogin(BaseModel):
+    email: str  # This field accepts both email and username
+    password: str
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    username: str
+    full_name: str
+    created_at: str
+    last_login: Optional[str] = None
+    is_premium: bool = False
 
 class TokenResponse(BaseModel):
     access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-    expires_in: int = 86400  # 24 hours
+    token_type: str
+    user: UserResponse
 
+class UserPreferencesUpdate(BaseModel):
+    default_country: Optional[str] = None
+    default_timeframe: Optional[str] = None
+    chart_theme: Optional[str] = None
+    notifications_enabled: Optional[bool] = None
+    email_alerts: Optional[bool] = None
+    sms_alerts: Optional[bool] = None
+    preferred_sectors: Optional[List[str]] = None
+    risk_tolerance: Optional[str] = None
+    investment_horizon: Optional[str] = None
 
-class UserResponse(BaseModel):
-    user_id: str
-    username: str
-    email: str
-    roles: List[str]
-    permissions: List[str]
-    is_active: bool
-    is_verified: bool
-    created_at: datetime
-    last_login: Optional[datetime]
+class WatchlistUpdate(BaseModel):
+    ticker: str
 
+class PortfolioCreate(BaseModel):
+    name: str
 
-class PasswordChange(BaseModel):
-    current_password: str
-    new_password: str = Field(..., min_length=8)
-
-
-class AuditLogResponse(BaseModel):
-    log_id: str
-    user_id: Optional[str]
-    action: str
-    resource: str
-    resource_id: Optional[str]
-    details: Dict[str, Any]
-    ip_address: Optional[str]
-    user_agent: Optional[str]
-    timestamp: datetime
-    success: bool
-
-
-# Dependency to get current user
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    request: Request = None
-) -> User:
-    """Get current authenticated user"""
-    security_manager = get_security_manager()
-    
-    user = security_manager.verify_access_token(credentials.credentials)
-    if not user:
-        security_manager.audit_logger.log_action(
-            user_id=None,
-            action="token_verification_failed",
-            resource="auth",
-            ip_address=request.client.host if request else None,
-            user_agent=request.headers.get("user-agent") if request else None,
-            success=False
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account is disabled"
-        )
-    
-    return user
-
-
-# Dependency to check permissions
-def require_permission(permission: Permission):
-    """Decorator to require specific permission"""
-    def permission_checker(current_user: User = Depends(get_current_user)):
-        security_manager = get_security_manager()
-        if not security_manager.check_permission(current_user, permission):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied: {permission.value}"
-            )
-        return current_user
-    return permission_checker
-
-
-@router.get("/health")
-async def health_check():
-    """Health check for security system"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {
-            "authentication": "active",
-            "authorization": "active",
-            "audit_logging": "active",
-            "encryption": "active"
-        }
-    }
-
-
-@router.post("/register", response_model=UserResponse)
-async def register_user(user_data: UserCreate, request: Request):
+@router.post("/register", response_model=TokenResponse)
+async def register(user_data: UserRegister):
     """Register a new user"""
     try:
-        security_manager = get_security_manager()
-        
-        # Check if username or email already exists
-        for user in security_manager.users.values():
-            if user.username == user_data.username:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Username already exists"
-                )
-            if user.email == user_data.email:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Email already exists"
-                )
-        
-        # Convert string roles to UserRole enum
-        roles = []
-        for role_str in user_data.roles:
-            try:
-                roles.append(UserRole(role_str))
-            except ValueError:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid role: {role_str}"
-                )
-        
-        # Create user
-        user = security_manager.create_user(
-            username=user_data.username,
+        result = register_user(
             email=user_data.email,
-            password=user_data.password,
-            roles=roles
+            username=user_data.username,
+            full_name=user_data.full_name,
+            password=user_data.password
         )
-        
-        security_manager.audit_logger.log_action(
-            user_id=user.user_id,
-            action="user_registered",
-            resource="user",
-            resource_id=user.user_id,
-            ip_address=request.client.host,
-            user_agent=request.headers.get("user-agent"),
-            success=True
-        )
-        
-        return UserResponse(
-            user_id=user.user_id,
-            username=user.username,
-            email=user.email,
-            roles=[role.value for role in user.roles],
-            permissions=[perm.value for perm in security_manager.rbac_manager.get_user_permissions(user)],
-            is_active=user.is_active,
-            is_verified=user.is_verified,
-            created_at=user.created_at,
-            last_login=user.last_login
-        )
-        
-    except HTTPException:
-        raise
+        return TokenResponse(**result)
+    except HTTPException as e:
+        raise e
     except Exception as e:
-        logger.error(f"Error registering user: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Registration failed"
+        )
 
 @router.post("/login", response_model=TokenResponse)
-async def login_user(login_data: UserLogin, request: Request):
-    """Authenticate user and return tokens"""
+async def login(login_data: UserLogin):
+    """Login user"""
     try:
-        security_manager = get_security_manager()
-        
-        user = security_manager.authenticate_user(
-            login_data.username,
-            login_data.password,
-            ip_address=request.client.host
-        )
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid username or password"
-            )
-        
-        # Create tokens
-        tokens = security_manager.create_tokens(user)
-        
-        return TokenResponse(**tokens)
-        
-    except HTTPException:
-        raise
+        result = login_user(email_or_username=login_data.email, password=login_data.password)
+        return TokenResponse(**result)
+    except HTTPException as e:
+        raise e
     except Exception as e:
-        logger.error(f"Error during login: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Login failed"
+        )
 
+@router.post("/logout")
+async def logout(current_user: User = Depends(get_current_user)):
+    """Logout user"""
+    auth_manager = get_auth_manager()
+    revoked_count = auth_manager.revoke_all_user_tokens(current_user.id)
+    
+    return {
+        "message": "Successfully logged out",
+        "revoked_tokens": revoked_count
+    }
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(current_user: User = Depends(get_current_user)):
     """Get current user information"""
-    security_manager = get_security_manager()
-    
     return UserResponse(
-        user_id=current_user.user_id,
-        username=current_user.username,
+        id=current_user.id,
         email=current_user.email,
-        roles=[role.value for role in current_user.roles],
-        permissions=[perm.value for perm in security_manager.rbac_manager.get_user_permissions(current_user)],
-        is_active=current_user.is_active,
-        is_verified=current_user.is_verified,
-        created_at=current_user.created_at,
-        last_login=current_user.last_login
+        username=current_user.username,
+        full_name=current_user.full_name,
+        created_at=current_user.created_at.isoformat(),
+        last_login=current_user.last_login.isoformat() if current_user.last_login else None,
+        is_premium=current_user.is_premium
     )
 
-
-@router.post("/change-password")
-async def change_password(
-    password_data: PasswordChange,
-    current_user: User = Depends(get_current_user),
-    request: Request = None
-):
-    """Change user password"""
-    try:
-        security_manager = get_security_manager()
-        
-        # Verify current password
-        if not security_manager.password_manager.verify_password(
-            password_data.current_password,
-            current_user.password_hash
-        ):
-            security_manager.audit_logger.log_action(
-                user_id=current_user.user_id,
-                action="password_change_failed",
-                resource="user",
-                resource_id=current_user.user_id,
-                details={"reason": "invalid_current_password"},
-                ip_address=request.client.host if request else None,
-                success=False
-            )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Current password is incorrect"
-            )
-        
-        # Update password
-        current_user.password_hash = security_manager.password_manager.hash_password(password_data.new_password)
-        
-        security_manager.audit_logger.log_action(
-            user_id=current_user.user_id,
-            action="password_changed",
-            resource="user",
-            resource_id=current_user.user_id,
-            ip_address=request.client.host if request else None,
-            success=True
-        )
-        
-        return {"message": "Password changed successfully"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error changing password: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/permissions")
-async def get_user_permissions(current_user: User = Depends(get_current_user)):
-    """Get current user permissions"""
-    security_manager = get_security_manager()
-    permissions = security_manager.rbac_manager.get_user_permissions(current_user)
+@router.get("/preferences")
+async def get_user_preferences(current_user: User = Depends(get_current_user)):
+    """Get user preferences"""
+    user_manager = get_user_manager()
+    preferences = user_manager.user_preferences.get(current_user.id)
+    
+    if not preferences:
+        return UserPreferencesUpdate()
     
     return {
-        "permissions": [perm.value for perm in permissions],
-        "roles": [role.value for role in current_user.roles]
+        "default_country": preferences.default_country,
+        "default_timeframe": preferences.default_timeframe,
+        "chart_theme": preferences.chart_theme,
+        "notifications_enabled": preferences.notifications_enabled,
+        "email_alerts": preferences.email_alerts,
+        "sms_alerts": preferences.sms_alerts,
+        "preferred_sectors": preferences.preferred_sectors or [],
+        "risk_tolerance": preferences.risk_tolerance,
+        "investment_horizon": preferences.investment_horizon
     }
 
-
-@router.get("/audit-logs", response_model=List[AuditLogResponse])
-async def get_audit_logs(
-    limit: int = 100,
-    user_id: Optional[str] = None,
-    resource: Optional[str] = None,
-    current_user: User = Depends(require_permission(Permission.SYSTEM_ADMIN))
+@router.put("/preferences")
+async def update_user_preferences(
+    preferences: UserPreferencesUpdate,
+    current_user: User = Depends(get_current_user)
 ):
-    """Get audit logs (admin only)"""
-    try:
-        security_manager = get_security_manager()
-        
-        logs = security_manager.get_audit_logs(user_id, resource)
-        logs = logs[:limit]
-        
-        return [
-            AuditLogResponse(
-                log_id=log.log_id,
-                user_id=log.user_id,
-                action=log.action,
-                resource=log.resource,
-                resource_id=log.resource_id,
-                details=log.details,
-                ip_address=log.ip_address,
-                user_agent=log.user_agent,
-                timestamp=log.timestamp,
-                success=log.success
-            )
-            for log in logs
-        ]
-        
-    except Exception as e:
-        logger.error(f"Error getting audit logs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/users", response_model=List[UserResponse])
-async def list_users(
-    current_user: User = Depends(require_permission(Permission.MANAGE_USERS))
-):
-    """List all users (admin only)"""
-    try:
-        security_manager = get_security_manager()
-        
-        users = []
-        for user in security_manager.users.values():
-            users.append(UserResponse(
-                user_id=user.user_id,
-                username=user.username,
-                email=user.email,
-                roles=[role.value for role in user.roles],
-                permissions=[perm.value for perm in security_manager.rbac_manager.get_user_permissions(user)],
-                is_active=user.is_active,
-                is_verified=user.is_verified,
-                created_at=user.created_at,
-                last_login=user.last_login
-            ))
-        
-        return users
-        
-    except Exception as e:
-        logger.error(f"Error listing users: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/users/{user_id}/activate")
-async def activate_user(
-    user_id: str,
-    current_user: User = Depends(require_permission(Permission.MANAGE_USERS))
-):
-    """Activate/deactivate a user (admin only)"""
-    try:
-        security_manager = get_security_manager()
-        
-        if user_id not in security_manager.users:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        user = security_manager.users[user_id]
-        user.is_active = not user.is_active
-        
-        security_manager.audit_logger.log_action(
-            user_id=current_user.user_id,
-            action="user_status_changed",
-            resource="user",
-            resource_id=user_id,
-            details={"new_status": "active" if user.is_active else "inactive"},
-            success=True
+    """Update user preferences"""
+    user_manager = get_user_manager()
+    
+    # Convert to dict, excluding None values
+    prefs_dict = {k: v for k, v in preferences.dict().items() if v is not None}
+    
+    success = user_manager.update_user_preferences(current_user.id, prefs_dict)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to update preferences"
         )
-        
-        return {"message": f"User {'activated' if user.is_active else 'deactivated'} successfully"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error changing user status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    
+    return {"message": "Preferences updated successfully"}
 
-
-@router.get("/roles")
-async def get_available_roles():
-    """Get available user roles"""
+@router.get("/watchlist")
+async def get_watchlist(current_user: User = Depends(get_current_user)):
+    """Get user's watchlist"""
+    user_manager = get_user_manager()
+    watchlist = user_manager.get_user_watchlist(current_user.id)
+    
     return {
-        "roles": [
-            {
-                "value": role.value,
-                "name": role.value.title(),
-                "description": f"{role.value.title()} role"
-            }
-            for role in UserRole
-        ]
+        "watchlist": watchlist,
+        "count": len(watchlist)
     }
 
+@router.post("/watchlist")
+async def add_to_watchlist(
+    ticker_data: WatchlistUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Add ticker to watchlist"""
+    user_manager = get_user_manager()
+    success = user_manager.add_to_watchlist(current_user.id, ticker_data.ticker)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to add ticker to watchlist"
+        )
+    
+    return {"message": f"Added {ticker_data.ticker} to watchlist"}
 
-@router.get("/permissions")
-async def get_available_permissions():
-    """Get available permissions"""
+@router.delete("/watchlist/{ticker}")
+async def remove_from_watchlist(
+    ticker: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Remove ticker from watchlist"""
+    user_manager = get_user_manager()
+    success = user_manager.remove_from_watchlist(current_user.id, ticker)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to remove ticker from watchlist"
+        )
+    
+    return {"message": f"Removed {ticker} from watchlist"}
+
+@router.get("/portfolios")
+async def get_portfolios(current_user: User = Depends(get_current_user)):
+    """Get user's portfolios"""
+    user_manager = get_user_manager()
+    portfolios = user_manager.get_user_portfolios(current_user.id)
+    
     return {
-        "permissions": [
-            {
-                "value": perm.value,
-                "name": perm.value.replace("_", " ").title(),
-                "description": f"Permission to {perm.value.replace('_', ' ')}"
-            }
-            for perm in Permission
-        ]
+        "portfolios": portfolios,
+        "count": len(portfolios)
+    }
+
+@router.post("/portfolios")
+async def create_portfolio(
+    portfolio_data: PortfolioCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new portfolio"""
+    user_manager = get_user_manager()
+    success = user_manager.create_portfolio(current_user.id, portfolio_data.name)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to create portfolio"
+        )
+    
+    return {"message": f"Created portfolio: {portfolio_data.name}"}
+
+@router.get("/profile")
+async def get_user_profile(current_user: User = Depends(get_current_user)):
+    """Get comprehensive user profile"""
+    user_manager = get_user_manager()
+    
+    return {
+        "user": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "username": current_user.username,
+            "full_name": current_user.full_name,
+            "created_at": current_user.created_at.isoformat(),
+            "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
+            "is_premium": current_user.is_premium,
+            "is_active": current_user.is_active
+        },
+        "preferences": user_manager.user_preferences.get(current_user.id, {}),
+        "watchlist": user_manager.get_user_watchlist(current_user.id),
+        "portfolios": user_manager.get_user_portfolios(current_user.id),
+        "stats": {
+            "watchlist_count": len(user_manager.get_user_watchlist(current_user.id)),
+            "portfolio_count": len(user_manager.get_user_portfolios(current_user.id)),
+            "account_age_days": (datetime.now() - current_user.created_at).days
+        }
     }

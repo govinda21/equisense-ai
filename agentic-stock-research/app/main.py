@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,23 +15,20 @@ from pydantic import ValidationError
 from app.config import AppSettings, get_settings
 from app.logging import configure_logging, get_logger, init_langfuse_if_configured, log_custom_event, maybe_observe
 from app.schemas.input import ResearchRequest, AnalysisRequest, ChatRequest
-from app.utils.async_utils import AsyncProcessor, monitor_performance, get_performance_monitor
+from app.utils.async_utils import monitor_performance, get_performance_monitor
 from app.tools.ticker_mapping import (
     map_ticker_to_symbol, 
-    get_currency_symbol, 
-    format_market_cap,
     get_supported_countries,
     INDIAN_STOCK_MAPPING,
     US_STOCK_MAPPING
 )
+from app.tools.bulk_analyzer import analyze_stocks_bulk, BulkAnalysisConfig
+from app.monitoring.performance_monitor import get_performance_monitor, get_performance_summary
 from app.schemas.output import ResearchResponse
 from app.graph.workflow import build_research_graph
-from app.api.portfolio import router as portfolio_router
-from app.api.backtesting import router as backtesting_router
-from app.api.monitoring import router as monitoring_router
 from app.api.reports import router as reports_router
-from app.api.auth import router as auth_router
-from app.api.performance import router as performance_router
+# from app.api.auth import router as auth_router  # Disabled for now
+from app.api.realtime import router as realtime_router
 
 
 def create_app() -> FastAPI:
@@ -68,12 +66,9 @@ def create_app() -> FastAPI:
     )
     
     # Include API routers
-    app.include_router(portfolio_router)
-    app.include_router(backtesting_router)
-    app.include_router(monitoring_router)
     app.include_router(reports_router)
-    app.include_router(auth_router)
-    app.include_router(performance_router)
+    # app.include_router(auth_router)  # Disabled for now
+    app.include_router(realtime_router)
     
     # Custom validation error handler for better debugging
     @app.exception_handler(RequestValidationError)
@@ -100,6 +95,61 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> Any:
         return {"status": "ok"}
+    
+    @app.get("/cache-stats")
+    async def cache_stats():
+        """Get cache statistics"""
+        try:
+            from app.cache.redis_cache import get_cache_manager
+            cache_manager = await get_cache_manager()
+            stats = cache_manager.get_cache_stats()
+            return stats
+        except Exception as e:
+            return {"error": str(e), "status": "cache_stats_unavailable"}
+    
+    @app.post("/cache-clear")
+    async def clear_cache():
+        """Clear all cache entries"""
+        try:
+            from app.cache.redis_cache import get_cache_manager
+            cache_manager = await get_cache_manager()
+            # Clear all cache entries
+            if hasattr(cache_manager, '_memory_cache'):
+                cache_manager._memory_cache.clear()
+            return {"status": "success", "message": "Cache cleared successfully"}
+        except Exception as e:
+            return {"error": str(e), "status": "cache_clear_failed"}
+    
+    @app.post("/cache-clear/{ticker}")
+    async def clear_ticker_cache(ticker: str):
+        """Clear cache entries for a specific ticker"""
+        try:
+            from app.cache.redis_cache import get_cache_manager
+            cache_manager = await get_cache_manager()
+            
+            # Clear earnings call analysis cache for this ticker
+            cache_keys_to_clear = [
+                f"earnings_call_analysis:{ticker}:90:5",
+                f"earnings_call_analysis:{ticker}:180:5",
+                f"api_ninja_transcripts:{ticker}:90",
+                f"api_ninja_transcripts:{ticker}:180",
+                f"fmp_transcripts:{ticker}:90",
+                f"fmp_transcripts:{ticker}:180"
+            ]
+            
+            cleared_count = 0
+            for key in cache_keys_to_clear:
+                if await cache_manager.delete(key):
+                    cleared_count += 1
+            
+            return {
+                "status": "success", 
+                "message": f"Cleared {cleared_count} cache entries for {ticker}",
+                "ticker": ticker,
+                "cleared_entries": cleared_count
+            }
+        except Exception as e:
+            return {"error": str(e), "status": "cache_clear_failed"}
     
     @app.get("/countries")
     async def get_countries() -> Any:
@@ -235,6 +285,88 @@ def create_app() -> FastAPI:
             return out
         except Exception as e:
             logger.exception("analyze_failed", tickers=req.tickers)
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.post("/analyze-bulk")
+    @maybe_observe()
+    @monitor_performance("bulk_analysis")
+    async def analyze_bulk(
+        req: ResearchRequest, 
+        settings: AppSettings = Depends(get_settings)
+    ) -> Any:
+        """
+        Optimized bulk analysis endpoint for multiple stocks
+        """
+        logger.info("bulk_analysis_started", ticker_count=len(req.tickers))
+        
+        try:
+            # Map tickers to proper Yahoo Finance symbols
+            mapped_tickers = []
+            country = getattr(req, 'country', 'United States')
+            
+            for ticker in req.tickers:
+                try:
+                    mapped_symbol, exchange, currency = map_ticker_to_symbol(ticker, country)
+                    mapped_tickers.append(mapped_symbol)
+                    logger.info(f"Mapped {ticker} -> {mapped_symbol} [{exchange}] {currency}")
+                except Exception as e:
+                    logger.warning(f"Failed to map ticker {ticker}: {e}")
+                    mapped_tickers.append(ticker)  # Use original if mapping fails
+            
+            # Configure bulk analysis based on request size
+            config = BulkAnalysisConfig(
+                max_concurrent_stocks=min(10, len(mapped_tickers)),  # Adaptive concurrency
+                batch_size=min(20, len(mapped_tickers)),  # Adaptive batch size
+                timeout_per_stock=30.0,
+                cache_shared_data=True,
+                enable_performance_monitoring=True
+            )
+            
+            # Perform bulk analysis
+            result = await analyze_stocks_bulk(mapped_tickers, country, config)
+            
+            # Format response
+            response_data = {
+                "success": True,
+                "total_stocks": len(mapped_tickers),
+                "successful_analyses": len(result.successful_analyses),
+                "failed_analyses": len(result.failed_analyses),
+                "success_rate": result.success_rate,
+                "total_time": result.total_time,
+                "average_time_per_stock": result.performance_metrics.get("average_time_per_stock", 0),
+                "reports": result.successful_analyses,
+                "failed_tickers": [ticker for ticker, _ in result.failed_analyses],
+                "performance_metrics": result.performance_metrics
+            }
+            
+            logger.info("bulk_analysis_completed", 
+                       successful=len(result.successful_analyses),
+                       failed=len(result.failed_analyses),
+                       total_time=result.total_time)
+            
+            return ORJSONResponse(content=response_data)
+            
+        except Exception as e:
+            logger.exception("bulk_analysis_failed", tickers=req.tickers)
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    @app.get("/performance-metrics")
+    async def get_performance_metrics():
+        """
+        Get current performance metrics and system status
+        """
+        try:
+            monitor = get_performance_monitor()
+            summary = monitor.get_detailed_performance_summary()
+            
+            return ORJSONResponse(content={
+                "success": True,
+                "performance_summary": summary,
+                "timestamp": time.time()
+            })
+            
+        except Exception as e:
+            logger.error(f"Failed to get performance metrics: {e}")
             return JSONResponse(status_code=500, content={"error": str(e)})
     
     @app.post("/api/generate-pdf")

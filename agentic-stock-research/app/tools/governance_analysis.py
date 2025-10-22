@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import yfinance as yf
 
+from app.utils.rate_limiter import get_yahoo_client
+
 logger = logging.getLogger(__name__)
 
 
@@ -131,33 +133,49 @@ class GovernanceAnalyzer:
             return {"error": str(e)}
     
     async def _fetch_governance_data(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch governance-related data"""
+        """Fetch governance-related data with rate limiting"""
         try:
-            def _fetch():
-                t = yf.Ticker(ticker)
-                info = t.info or {}
+            # Use rate-limited Yahoo Finance client
+            yahoo_client = get_yahoo_client()
+            
+            # Fetch info data
+            info = await yahoo_client.get_info(ticker)
+            
+            # Fetch additional governance data
+            async def fetch_governance_details():
+                loop = asyncio.get_event_loop()
+                t = await loop.run_in_executor(None, lambda: yf.Ticker(ticker))
                 
                 # Get institutional holders
                 institutional_holders = None
                 try:
-                    institutional_holders = t.institutional_holders
+                    institutional_holders = await loop.run_in_executor(None, lambda: t.institutional_holders)
                 except:
                     pass
                 
                 # Get insider transactions
                 insider_transactions = None
                 try:
-                    insider_transactions = t.insider_transactions
+                    insider_transactions = await loop.run_in_executor(None, lambda: t.insider_transactions)
                 except:
                     pass
                 
                 return {
-                    "info": info,
                     "institutional_holders": institutional_holders,
                     "insider_transactions": insider_transactions
                 }
             
-            return await asyncio.to_thread(_fetch)
+            # Use rate limiting for governance data fetching
+            await yahoo_client.client.rate_limiter.acquire()
+            try:
+                governance_details = await fetch_governance_details()
+            finally:
+                yahoo_client.client.rate_limiter.release()
+            
+            return {
+                "info": info,
+                **governance_details
+            }
             
         except Exception as e:
             logger.error(f"Failed to fetch governance data for {ticker}: {e}")

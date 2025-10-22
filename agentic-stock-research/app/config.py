@@ -16,6 +16,18 @@ class AppSettings(BaseSettings):
 
     youtube_api_key: Optional[str] = Field(default=None, alias="YOUTUBE_API_KEY")
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    
+    # Earnings Call APIs
+    api_ninja_key: Optional[str] = Field(default=None, alias="API_NINJA_KEY")
+    fmp_api_key: Optional[str] = Field(default=None, alias="FMP_API_KEY")
+    alpha_street_api_key: Optional[str] = Field(default=None, alias="ALPHA_STREET_API_KEY")
+    
+    # Indian Market Data APIs
+    bse_api_key: Optional[str] = Field(default=None, alias="BSE_API_KEY")
+    nse_api_key: Optional[str] = Field(default=None, alias="NSE_API_KEY")
+    
+    # Additional LLM APIs
+    anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
 
     # LLM provider + model (default: Ollama local)
     llm_provider: str = Field(default="ollama", alias="LLM_PROVIDER")

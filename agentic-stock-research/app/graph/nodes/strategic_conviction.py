@@ -20,8 +20,14 @@ async def strategic_conviction_node(state: ResearchState, settings: AppSettings)
     """
     ticker = state["tickers"][0]
     
+    # Check if already executed to prevent duplicate runs
+    if "strategic_conviction" in state.get("analysis", {}):
+        logger.info(f"STRATEGIC_CONVICTION_NODE: Already executed for {ticker}, skipping")
+        return state
+    
     try:
-        logger.info(f"Starting strategic conviction analysis for {ticker}")
+        logger.info(f"STRATEGIC_CONVICTION_NODE: Starting strategic conviction analysis for {ticker}")
+        logger.info(f"STRATEGIC_CONVICTION_NODE: State keys: {list(state.keys())}")
         
         # Perform strategic conviction analysis
         conviction_result = await analyze_strategic_conviction(ticker)
@@ -48,10 +54,11 @@ async def strategic_conviction_node(state: ResearchState, settings: AppSettings)
             confidence = min(0.9, max(0.1, conviction_score / 100.0))
             state.setdefault("confidences", {})["strategic_conviction"] = confidence
             
-            logger.info(f"Strategic conviction analysis completed for {ticker} "
+            logger.info(f"STRATEGIC_CONVICTION_NODE: Analysis completed for {ticker} "
                        f"(Score: {conviction_score:.1f}, "
                        f"Level: {conviction_analysis['conviction_level']}, "
                        f"Recommendation: {conviction_analysis['strategic_recommendation']})")
+            logger.info(f"STRATEGIC_CONVICTION_NODE: Stored in state['analysis']['strategic_conviction']")
         
         return state
         

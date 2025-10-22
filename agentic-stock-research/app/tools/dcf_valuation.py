@@ -14,6 +14,7 @@ import pandas as pd
 import yfinance as yf
 
 from app.utils.validation import DataValidator
+from app.utils.rate_limiter import get_yahoo_client
 
 logger = logging.getLogger(__name__)
 
@@ -266,26 +267,37 @@ class DCFValuationEngine:
             return {"error": str(e)}
     
     async def _fetch_company_data(self, ticker: str) -> Optional[Dict[str, Any]]:
-        """Fetch comprehensive company data for DCF"""
+        """Fetch comprehensive company data for DCF with rate limiting"""
         try:
             logger.info(f"DCF: Fetching company data for {ticker}")
             
-            def _fetch():
-                t = yf.Ticker(ticker)
-                info = t.info or {}
-                financials = t.financials
-                balance_sheet = t.balance_sheet
-                cashflow = t.cashflow
-                
+            # Use rate-limited Yahoo Finance client
+            yahoo_client = get_yahoo_client()
+            
+            # Fetch info data
+            info = await yahoo_client.get_info(ticker)
+            
+            # Fetch financial data in parallel with controlled concurrency
+            async def fetch_financials():
+                loop = asyncio.get_event_loop()
+                t = await loop.run_in_executor(None, lambda: yf.Ticker(ticker))
                 return {
-                    "info": info,
-                    "financials": financials,
-                    "balance_sheet": balance_sheet,
-                    "cashflow": cashflow
+                    "financials": await loop.run_in_executor(None, lambda: t.financials),
+                    "balance_sheet": await loop.run_in_executor(None, lambda: t.balance_sheet),
+                    "cashflow": await loop.run_in_executor(None, lambda: t.cashflow)
                 }
             
-            data = await asyncio.to_thread(_fetch)
-            info = data["info"]
+            # Use rate limiting for financial data fetching
+            await yahoo_client.client.rate_limiter.acquire()
+            try:
+                financial_data = await fetch_financials()
+            finally:
+                yahoo_client.client.rate_limiter.release()
+            
+            data = {
+                "info": info,
+                **financial_data
+            }
             
             # Enhanced logging for debugging
             logger.info(f"DCF data availability for {ticker}: "
@@ -304,7 +316,13 @@ class DCFValuationEngine:
             if not info.get("totalRevenue"):
                 logger.warning(f"DCF: Missing revenue data for {ticker} - will use estimates")
             
-            if not info.get("freeCashflow"):
+            # Extract actual Free Cash Flow from cashflow DataFrame
+            actual_fcf = self._extract_free_cash_flow(financial_data.get("cashflow"))
+            if actual_fcf is not None:
+                logger.info(f"DCF: Found actual Free Cash Flow data for {ticker}: {actual_fcf}")
+                # Add to info for use in scenarios
+                info["freeCashflow"] = actual_fcf
+            elif not info.get("freeCashflow"):
                 logger.warning(f"DCF: Missing free cash flow data for {ticker} - will estimate from other metrics")
                 
             logger.info(f"DCF: Successfully fetched company data for {ticker}")
@@ -312,6 +330,55 @@ class DCFValuationEngine:
             
         except Exception as e:
             logger.error(f"DCF: Failed to fetch company data for {ticker}: {e}")
+            return None
+    
+    def _extract_free_cash_flow(self, cashflow_df: Optional[pd.DataFrame]) -> Optional[float]:
+        """
+        Extract the most recent Free Cash Flow from the cashflow DataFrame
+        
+        Args:
+            cashflow_df: Pandas DataFrame with cashflow data
+            
+        Returns:
+            Most recent Free Cash Flow value or None if not found
+        """
+        if cashflow_df is None or cashflow_df.empty:
+            return None
+        
+        try:
+            # Look for Free Cash Flow in the DataFrame
+            fcf_row = None
+            for idx in cashflow_df.index:
+                if 'Free Cash Flow' in str(idx):
+                    fcf_row = cashflow_df.loc[idx]
+                    break
+            
+            if fcf_row is not None:
+                # Get the most recent positive value (prefer positive FCF for DCF)
+                fcf_values = []
+                for col in cashflow_df.columns:
+                    value = fcf_row[col]
+                    if pd.notna(value) and value != 0:
+                        fcf_values.append((col, float(value)))
+                        logger.debug(f"DCF: Found FCF {value:,.0f} for year {col}")
+                
+                if fcf_values:
+                    # Prefer positive FCF values, then most recent
+                    positive_fcf = [(col, val) for col, val in fcf_values if val > 0]
+                    if positive_fcf:
+                        # Use the most recent positive FCF
+                        logger.info(f"DCF: Using positive FCF {positive_fcf[0][1]:,.0f} from {positive_fcf[0][0]}")
+                        return positive_fcf[0][1]
+                    else:
+                        # If no positive FCF, use the most recent
+                        logger.warning(f"DCF: No positive FCF found, using most recent {fcf_values[0][1]:,.0f}")
+                        return fcf_values[0][1]
+            
+            logger.debug("DCF: No Free Cash Flow found in cashflow DataFrame")
+            return None
+            
+        except Exception as e:
+            logger.error(f"DCF: Error extracting Free Cash Flow: {e}")
             return None
     
     async def _generate_default_scenarios(self, company_data: Dict[str, Any]) -> List[DCFScenario]:
@@ -330,6 +397,12 @@ class DCFValuationEngine:
         # Get sector-specific terminal growth
         sector = info.get("sector")
         terminal_growth = self._get_terminal_growth_rate(sector)
+        
+        # For Indian stocks, use more conservative assumptions to match Screener.in methodology
+        if ticker.endswith('.NS') or ticker.endswith('.BO'):
+            # Use more conservative terminal growth for Indian stocks
+            terminal_growth = min(terminal_growth, 0.02)  # Cap at 2%
+            logger.info(f"DCF: Using conservative terminal growth for Indian stock: {terminal_growth:.2%}")
         
         logger.info(f"DCF scenario generation for {ticker}: "
                    f"country_rfr={risk_free_rate:.2%}, "
@@ -420,6 +493,7 @@ class DCFValuationEngine:
         Raises ValueError only for truly unrecoverable situations
         """
         info = company_data["info"]
+        ticker = info.get("symbol", "")
         
         # Get current financials with multiple fallbacks
         current_revenue = info.get("totalRevenue") or info.get("revenue") or 0
@@ -453,6 +527,13 @@ class DCFValuationEngine:
         elif wacc > 0.30:
             logger.warning(f"DCF: WACC too high ({wacc:.2%}), capping at 30%")
             wacc = 0.30
+        
+        # For Indian stocks, use more conservative WACC to match Screener.in methodology
+        if ticker.endswith('.NS') or ticker.endswith('.BO'):
+            # Increase WACC by 1-2% for Indian stocks to be more conservative
+            original_wacc = wacc
+            wacc = min(wacc + 0.015, 0.15)  # Add 1.5% but cap at 15%
+            logger.info(f"DCF: Using conservative WACC for Indian stock: {original_wacc:.2%} -> {wacc:.2%}")
         
         # Critical: Ensure terminal growth < WACC (Gordon Growth Model requirement)
         if inputs.terminal_growth_rate >= wacc:

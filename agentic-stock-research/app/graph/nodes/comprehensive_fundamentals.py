@@ -58,12 +58,11 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
                     if current_price:
                         break
         
-        # Last resort: try to fetch current price from yfinance directly
+        # Last resort: try to fetch current price using rate-limited client
         if not current_price:
             try:
-                import yfinance as yf
-                t = yf.Ticker(ticker)
-                info = t.info or {}
+                from app.tools.finance import fetch_info
+                info = await fetch_info(ticker)
                 current_price = info.get("currentPrice") or info.get("regularMarketPrice")
                 logger.info(f"Fetched current price from yfinance for {ticker}: {current_price}")
             except Exception as e:
@@ -72,22 +71,45 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
         # Log the current price for debugging
         logger.info(f"Current price for {ticker}: {current_price}")
         
-        # Parallel execution of all analysis components
-        analysis_results = await asyncio.gather(
-            compute_fundamentals(ticker),
-            perform_dcf_valuation(ticker, current_price),
-            analyze_corporate_governance(ticker),
-            get_indian_market_data(ticker),
-            score_stock_comprehensively(ticker, current_price),
-            return_exceptions=True
+        # Parallel execution of all analysis components with timeout control
+        analysis_results = await asyncio.wait_for(
+            asyncio.gather(
+                compute_fundamentals(ticker),
+                perform_dcf_valuation(ticker, current_price),
+                analyze_corporate_governance(ticker),
+                get_indian_market_data(ticker),
+                score_stock_comprehensively(ticker, current_price),
+                return_exceptions=True
+            ),
+            timeout=45.0  # 45 second timeout for all fundamental analysis
         )
         
         # Process results
         basic_fundamentals = analysis_results[0] if not isinstance(analysis_results[0], Exception) else {}
-        dcf_valuation = analysis_results[1] if not isinstance(analysis_results[1], Exception) else {}
+        dcf_valuation_raw = analysis_results[1] if not isinstance(analysis_results[1], Exception) else {}
         governance_analysis = analysis_results[2] if not isinstance(analysis_results[2], Exception) else {}
         indian_market_data = analysis_results[3] if not isinstance(analysis_results[3], Exception) else {}
         comprehensive_score = analysis_results[4] if not isinstance(analysis_results[4], Exception) else None
+        
+        # Convert DCFOutputs to dictionary with expected keys
+        dcf_valuation = {}
+        if hasattr(dcf_valuation_raw, 'intrinsic_value_per_share'):
+            dcf_valuation = {
+                "intrinsic_value": dcf_valuation_raw.intrinsic_value_per_share,
+                "target_price": dcf_valuation_raw.intrinsic_value_per_share * 1.20,  # 20% premium
+                "enterprise_value": dcf_valuation_raw.enterprise_value,
+                "equity_value": dcf_valuation_raw.equity_value,
+                "wacc": dcf_valuation_raw.wacc,
+                "terminal_growth": dcf_valuation_raw.terminal_growth,
+                "margin_of_safety": dcf_valuation_raw.margin_of_safety,
+                "upside_potential": dcf_valuation_raw.upside_potential,
+                "shares_outstanding": dcf_valuation_raw.shares_outstanding,
+                "net_debt": dcf_valuation_raw.net_debt,
+                "pv_explicit_period": dcf_valuation_raw.pv_explicit_period,
+                "pv_terminal_value": dcf_valuation_raw.pv_terminal_value
+            }
+        elif isinstance(dcf_valuation_raw, dict):
+            dcf_valuation = dcf_valuation_raw
         
         # Log any failures
         for i, result in enumerate(analysis_results):
@@ -100,6 +122,7 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
         comprehensive_analysis = {
             "ticker": ticker,
             "analysis_timestamp": analysis_results[4].ticker if comprehensive_score else None,
+            "current_price": current_price,
             
             # Core metrics
             "basic_fundamentals": basic_fundamentals,
@@ -156,6 +179,7 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
             "trading_recommendations": {
                 "position_sizing_pct": comprehensive_score.position_sizing_pct if comprehensive_score else 1.0,
                 "entry_zone": comprehensive_score.entry_zone if comprehensive_score else (0.0, 0.0),
+                "entry_explanation": getattr(comprehensive_score, 'entry_explanation', 'Entry zone calculated using technical analysis'),
                 "target_price": comprehensive_score.target_price if comprehensive_score else 0.0,
                 "stop_loss": comprehensive_score.stop_loss if comprehensive_score else 0.0,
                 "time_horizon_months": comprehensive_score.time_horizon_months if comprehensive_score else 12
@@ -185,7 +209,7 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
         }
         
         # Update state with comprehensive analysis
-        state.setdefault("analysis", {})["fundamentals"] = comprehensive_analysis
+        state.setdefault("analysis", {})["comprehensive_fundamentals"] = comprehensive_analysis
         
         # Set confidence based on comprehensive scoring confidence
         confidence = comprehensive_score.confidence_level if comprehensive_score else 0.5

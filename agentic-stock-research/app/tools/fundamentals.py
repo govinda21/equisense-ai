@@ -82,9 +82,36 @@ def _compute_from_statements(ticker: str, market_cap: Optional[float]) -> Dict[s
     out: Dict[str, Optional[float]] = {}
     try:
         t = yf.Ticker(ticker)
+        info = t.info or {}  # Get fundamental ratios from info
         is_df: pd.DataFrame = getattr(t, "financials", None)
         bs_df: pd.DataFrame = getattr(t, "balance_sheet", None)
         cf_df: pd.DataFrame = getattr(t, "cashflow", None)
+        
+        # Extract fundamental ratios from info (these are the ones visible in Yahoo Finance)
+        pe = info.get("trailingPE")
+        pb = info.get("priceToBook")
+        market_cap = info.get("marketCap")
+        current_price = info.get("currentPrice")
+        dividend_yield = info.get("dividendYield")
+        beta = info.get("beta")
+        volume = info.get("volume")
+        avg_volume = info.get("averageVolume")
+        eps = info.get("trailingEps")
+        forward_pe = info.get("forwardPE")
+        peg_ratio = info.get("pegRatio")
+        price_to_sales = info.get("priceToSalesTrailing12Months")
+        enterprise_value = info.get("enterpriseValue")
+        debt_to_equity = info.get("debtToEquity")
+        current_ratio = info.get("currentRatio")
+        quick_ratio = info.get("quickRatio")
+        gross_margins = info.get("grossMargins")
+        operating_margins = info.get("operatingMargins")
+        profit_margins = info.get("profitMargins")
+        return_on_assets = info.get("returnOnAssets")
+        return_on_equity = info.get("returnOnEquity")
+        revenue_growth = info.get("revenueGrowth")
+        earnings_growth = info.get("earningsGrowth")
+        target_price = info.get("targetMeanPrice")
 
         # ROE = Net Income / Avg Equity
         net_income = _get_last_value(is_df, ["Net Income", "NetIncome"])
@@ -94,21 +121,23 @@ def _compute_from_statements(ticker: str, market_cap: Optional[float]) -> Dict[s
             avg_equity = sum(equity_vals) / len(equity_vals)
             if avg_equity:
                 roe_fb = net_income / avg_equity
-        out["roe"] = roe_fb
+        # Use roe from info if available, otherwise use calculated roe_fb
+        if return_on_equity is None:
+            return_on_equity = roe_fb
 
         # EBITDA margin = EBITDA / Revenue
         ebitda_fb = _get_last_value(is_df, ["Ebitda", "EBITDA"])
         revenue_fb = _get_last_value(is_df, ["Total Revenue", "Revenue", "TotalRevenue"])
-        out["ebitda_margin"] = (ebitda_fb / revenue_fb) if ebitda_fb and revenue_fb else None
+        ebitda_margin = (ebitda_fb / revenue_fb) if ebitda_fb and revenue_fb else None
 
         # Interest coverage = EBIT or Operating Income / Interest Expense
         ebit_fb = _get_last_value(is_df, ["Ebit", "EBIT", "Operating Income"]) or None
         interest_fb = _get_last_value(is_df, ["Interest Expense", "InterestExpense"]) or None
         # Handle both positive and negative interest expense values, ensure non-zero denominator
         if ebit_fb is not None and interest_fb is not None and interest_fb != 0:
-            out["interest_coverage"] = ebit_fb / abs(interest_fb)
+            interest_coverage = ebit_fb / abs(interest_fb)
         else:
-            out["interest_coverage"] = None
+            interest_coverage = None
             if ebit_fb and not interest_fb:
                 logger.info(f"Interest coverage: EBIT={ebit_fb:,.0f} available but no Interest Expense for {ticker}")
 
@@ -132,7 +161,7 @@ def _compute_from_statements(ticker: str, market_cap: Optional[float]) -> Dict[s
         invested_capital = None
         if (total_debt_fb is not None) or (equity_last is not None):
             invested_capital = (total_debt_fb or 0.0) + (equity_last or 0.0) - (cash_fb or 0.0)
-        out["roic"] = (nopat / invested_capital) if (nopat is not None and invested_capital and invested_capital != 0) else None
+        roic = (nopat / invested_capital) if (nopat is not None and invested_capital and invested_capital != 0) else None
 
         # FCF yield fallback = (OCF + CapEx) / MarketCap
         ocf_fb = _get_last_value(cf_df, [
@@ -147,7 +176,7 @@ def _compute_from_statements(ticker: str, market_cap: Optional[float]) -> Dict[s
             "Capex",
             "Purchase Of Property Plant Equipment",
         ])
-        out["fcf_yield"] = ((ocf_fb + capex_fb) / market_cap) if isinstance(ocf_fb, (int, float)) and isinstance(capex_fb, (int, float)) and isinstance(market_cap, (int, float)) and market_cap else None
+        fcf_yield = ((ocf_fb + capex_fb) / market_cap) if isinstance(ocf_fb, (int, float)) and isinstance(capex_fb, (int, float)) and isinstance(market_cap, (int, float)) and market_cap else None
 
         # Debt to Equity ratio fallback
         # For banks: Use Total Liabilities / Equity
@@ -181,9 +210,44 @@ def _compute_from_statements(ticker: str, market_cap: Optional[float]) -> Dict[s
                 logger.warning(f"Cannot calculate D/E for {ticker}: Debt={total_debt_fb}, Liabilities={total_liabilities}, Equity={equity_last}")
         else:
             logger.warning(f"Cannot calculate D/E for {ticker}: Equity={equity_last}")
-        out["debt_to_equity"] = debt_to_equity_fb
+        # Use calculated values if info values are None
+        # Note: roic, fcf_yield, ebitda_margin, interest_coverage are already calculated above
+        # debt_to_equity needs to use the calculated fallback value
+        if debt_to_equity is None:
+            debt_to_equity = debt_to_equity_fb
 
-        return out
+        # Return the computed values
+        return {
+            "roe": return_on_equity,
+            "ebitda_margin": ebitda_margin,
+            "interest_coverage": interest_coverage,
+            "roic": roic,
+            "fcf_yield": fcf_yield,
+            "debt_to_equity": debt_to_equity,
+            "pe_ratio": pe,
+            "pb_ratio": pb,
+            "market_cap": market_cap,
+            "current_price": current_price,
+            "dividend_yield": dividend_yield,
+            "beta": beta,
+            "volume": volume,
+            "avg_volume": avg_volume,
+            "eps": eps,
+            "forward_pe": forward_pe,
+            "peg_ratio": peg_ratio,
+            "price_to_sales": price_to_sales,
+            "enterprise_value": enterprise_value,
+            "current_ratio": current_ratio,
+            "quick_ratio": quick_ratio,
+            "gross_margins": gross_margins,
+            "operating_margins": operating_margins,
+            "profit_margins": profit_margins,
+            "return_on_assets": return_on_assets,
+            "revenue_growth": revenue_growth,
+            "earnings_growth": earnings_growth,
+            "target_price": target_price
+        }
+
     except Exception as e:
         logger.error(f"Error in _compute_from_statements for {ticker}: {e}")
         return {}
@@ -204,7 +268,29 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
     - Operational efficiency (capex intensity)
     """
     info = await fetch_info(ticker)
-
+    
+    # For Indian stocks, try to get additional data from Indian market sources
+    indian_data = {}
+    if ticker.endswith('.NS') or ticker.endswith('.BO'):
+        try:
+            from app.tools.indian_market_data import get_indian_market_data
+            clean_ticker = ticker.replace('.NS', '').replace('.BO', '')
+            indian_data = await get_indian_market_data(clean_ticker)
+            logger.info(f"Fetched Indian market data for {ticker}: {len(indian_data)} fields")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Indian market data for {ticker}: {e}")
+        
+        # Also try Screener.in for fundamental ratios
+        try:
+            from app.tools.screener_scraper import get_screener_fundamentals
+            screener_data = await get_screener_fundamentals(ticker)
+            if screener_data:
+                indian_data.update(screener_data)
+                logger.info(f"Fetched Screener.in data for {ticker}: {len(screener_data)} fields")
+                logger.info(f"Screener.in Interest Coverage: {screener_data.get('interest_coverage')}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Screener.in data for {ticker}: {e}")
+    
     # Basic ratios with validation - SEPARATE trailing and forward P/E
     trailing_pe = DataValidator.validate_ratio(info.get("trailingPE"), "Trailing P/E", 0, 1000)
     forward_pe = DataValidator.validate_ratio(info.get("forwardPE"), "Forward P/E", 0, 1000)
@@ -222,11 +308,32 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
     pb = DataValidator.validate_ratio(info.get("priceToBook"), "P/B", 0, 100)
     roe_raw = info.get("returnOnEquity")  # fraction 0..1
     roe = DataValidator.validate_percentage(roe_raw, "ROE") if roe_raw else None
+    
+    # Use Indian data for ROE if available and Yahoo Finance data is missing
+    if roe is None and indian_data:
+        indian_roe = indian_data.get("roe") or indian_data.get("return_on_equity")
+        if indian_roe is not None:
+            roe = DataValidator.validate_percentage(indian_roe, "ROE (Indian)")
+            logger.info(f"Using Indian data for ROE: {roe}%")
+    
     revenue_growth_raw = info.get("revenueGrowth")  # fraction 0..1
     revenue_growth = DataValidator.validate_percentage(revenue_growth_raw, "Revenue Growth") if revenue_growth_raw else None
     gross_margins = DataValidator.validate_percentage(info.get("grossMargins"), "Gross Margins")
     operating_margins = DataValidator.validate_percentage(info.get("operatingMargins"), "Operating Margins")
     dividend_yield = DataValidator.validate_percentage(info.get("dividendYield"), "Dividend Yield")
+    
+    # Additional fundamental metrics from Yahoo Finance
+    beta = DataValidator.validate_ratio(info.get("beta"), "Beta", 0, 10)
+    current_price = DataValidator.validate_financial_value(info.get("currentPrice"), "Current Price", allow_negative=False)
+    volume = DataValidator.validate_financial_value(info.get("volume"), "Volume", allow_negative=False)
+    avg_volume = DataValidator.validate_financial_value(info.get("averageVolume"), "Average Volume", allow_negative=False)
+    eps = DataValidator.validate_financial_value(info.get("trailingEps"), "EPS", allow_negative=True)
+    target_price = DataValidator.validate_financial_value(info.get("targetMeanPrice"), "Target Price", allow_negative=False)
+    current_ratio = DataValidator.validate_ratio(info.get("currentRatio"), "Current Ratio", 0, 100)
+    quick_ratio = DataValidator.validate_ratio(info.get("quickRatio"), "Quick Ratio", 0, 100)
+    price_to_sales = DataValidator.validate_ratio(info.get("priceToSalesTrailing12Months"), "Price to Sales", 0, 100)
+    enterprise_value = DataValidator.validate_financial_value(info.get("enterpriseValue"), "Enterprise Value", allow_negative=False)
+    peg = DataValidator.validate_ratio(info.get("pegRatio"), "PEG Ratio", 0, 100)
 
     # Leverage & coverage with validation
     total_debt = DataValidator.validate_financial_value(info.get("totalDebt"), "Total Debt", allow_negative=False)
@@ -266,6 +373,19 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
             interest_coverage = ebit / abs(interest_expense)
         except Exception:
             interest_coverage = None
+    
+    # Use Indian data for interest coverage if available and Yahoo Finance data is missing
+    logger.info(f"Interest Coverage from Yahoo Finance: {interest_coverage}")
+    logger.info(f"Indian data available: {bool(indian_data)}")
+    if indian_data:
+        logger.info(f"Indian data keys: {list(indian_data.keys())}")
+        logger.info(f"Indian data Interest Coverage: {indian_data.get('interest_coverage')}")
+    
+    if interest_coverage is None and indian_data:
+        indian_interest_coverage = indian_data.get("interest_coverage") or indian_data.get("interestCoverage")
+        if indian_interest_coverage is not None:
+            interest_coverage = DataValidator.validate_ratio(indian_interest_coverage, "Interest Coverage (Indian)", 0, 1000)
+            logger.info(f"Using Indian data for Interest Coverage: {interest_coverage}x")
 
     # PEG ratio (prefer provided; fallback PE / growth)
     peg = info.get("pegRatio")
@@ -352,6 +472,7 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
             ebitda_margin = backfill.get("ebitda_margin", ebitda_margin)
         if interest_coverage is None:
             interest_coverage = backfill.get("interest_coverage", interest_coverage)
+            logger.info(f"Backfill Interest Coverage: {interest_coverage}")
         if roic is None:
             roic = backfill.get("roic", roic)
         if fcf_yield is None:
@@ -367,6 +488,7 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
         
         # Legacy PE (for backward compatibility)
         "pe": _safe_float(pe),
+        "pe_ratio": _safe_float(pe),  # Alias for compatibility
         
         # NEW: Separate trailing and forward P/E ratios
         "trailingPE": _safe_float(trailing_pe),
@@ -375,15 +497,26 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
         
         # Profitability metrics
         "pb": _safe_float(pb),
+        "pb_ratio": _safe_float(pb),  # Alias for compatibility
         "roe": _safe_float(roe),
         "revenueGrowth": _safe_float(revenue_growth),
         "grossMargins": _safe_float(gross_margins),
         "operatingMargins": _safe_float(operating_margins),
         "netProfitMargin": _safe_float(net_profit_margin),  # NEW
         "dividendYield": _safe_float(dividend_yield),
+        "dividend_yield": _safe_float(dividend_yield),  # Alias for compatibility
         
         # Extended metrics
         "debtToEquity": _safe_float(debt_to_equity),
+        "debt_to_equity": _safe_float(debt_to_equity),  # Alias for compatibility
+        "current_ratio": _safe_float(current_ratio),
+        "beta": _safe_float(beta),
+        "market_cap": _safe_float(market_cap),
+        "current_price": _safe_float(current_price),
+        "volume": _safe_float(volume),
+        "avg_volume": _safe_float(avg_volume),
+        "eps": _safe_float(eps),
+        "target_price": _safe_float(target_price),
         "interestCoverage": _safe_float(interest_coverage),
         "fcfYield": _safe_float(fcf_yield),
         "fcfMargin": _safe_float(fcf_margin),  # NEW

@@ -25,7 +25,7 @@ interface RankedStockListProps {
 type SortField = 'confidence' | 'price' | 'change' | 'marketCap' | 'volatility'
 type SortDirection = 'asc' | 'desc'
 
-export function RankedStockList({ stocks, mode, onAnalyze, loading }: RankedStockListProps) {
+export function RankedStockList({ stocks, mode, loading }: RankedStockListProps) {
   const [expandedTickers, setExpandedTickers] = useState<Set<string>>(new Set())
   const [sortField, setSortField] = useState<SortField>('confidence')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
@@ -52,13 +52,38 @@ export function RankedStockList({ stocks, mode, onAnalyze, loading }: RankedStoc
     })
 
     return filtered.sort((a, b) => {
+      // If sorting by recommendation (default), use recommendation strength + confidence
+      if (sortField === 'confidence') {
+        // Define recommendation strength order
+        const getRecommendationStrength = (rec: string) => {
+          const strengthMap: { [key: string]: number } = {
+            'Strong Buy': 7,
+            'Buy': 6,
+            'Hold': 5,
+            'Weak Hold': 4,
+            'Weak Sell': 3,
+            'Sell': 2,
+            'Strong Sell': 1
+          }
+          return strengthMap[rec] || 0
+        }
+        
+        const aStrength = getRecommendationStrength(a.recommendation || '')
+        const bStrength = getRecommendationStrength(b.recommendation || '')
+        
+        // First sort by recommendation strength (descending)
+        if (aStrength !== bStrength) {
+          return bStrength - aStrength
+        }
+        
+        // Then sort by confidence score (descending)
+        return b.confidenceScore - a.confidenceScore
+      }
+      
+      // For other sort fields, use the original logic
       let aVal: number, bVal: number
       
       switch (sortField) {
-        case 'confidence':
-          aVal = a.confidenceScore
-          bVal = b.confidenceScore
-          break
         case 'price':
           aVal = a.lastPrice
           bVal = b.lastPrice
@@ -124,7 +149,7 @@ export function RankedStockList({ stocks, mode, onAnalyze, loading }: RankedStoc
             Ranked {mode === 'buy' ? 'Buy' : 'Sell'} Opportunities
           </h2>
           <p className="text-sm text-slate-600 mt-1">
-            {sortedStocks.length} stocks analyzed • Sorted by {sortField}
+            {sortedStocks.length} stocks analyzed • Sorted by {sortField === 'confidence' ? 'recommendation strength' : sortField}
           </p>
         </div>
         
@@ -149,7 +174,7 @@ export function RankedStockList({ stocks, mode, onAnalyze, loading }: RankedStoc
               onChange={(e) => handleSort(e.target.value as SortField)}
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
             >
-              <option value="confidence">Confidence Score</option>
+              <option value="confidence">Recommendation Strength</option>
               <option value="price">Last Price</option>
               <option value="change">Change %</option>
               <option value="marketCap">Market Cap</option>

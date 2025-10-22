@@ -25,6 +25,9 @@ from app.graph.nodes.sector_macro import sector_macro_node
 from app.graph.nodes.growth_prospects import growth_prospects_node
 from app.graph.nodes.valuation import valuation_node
 from app.graph.nodes.filing_analysis import filing_analysis_node
+from app.graph.nodes.earnings_call_analysis import earnings_call_analysis_node
+from app.graph.nodes.strategic_conviction import strategic_conviction_node
+from app.graph.nodes.sector_rotation import sector_rotation_node
 from app.graph.nodes.synthesis import synthesis_node
 from app.graph.nodes.synthesis_multi import enhanced_synthesis_node
 
@@ -53,39 +56,44 @@ def build_research_graph(settings: AppSettings):
     graph.add_node("growth_prospects", _wrap(growth_prospects_node, settings))
     graph.add_node("valuation", _wrap(valuation_node, settings))
     graph.add_node("filing_analysis", _wrap(filing_analysis_node, settings))
+    graph.add_node("earnings_call_analysis", _wrap(earnings_call_analysis_node, settings))
+    graph.add_node("strategic_conviction", _wrap(strategic_conviction_node, settings))
+    graph.add_node("sector_rotation", _wrap(sector_rotation_node, settings))
     # Use simple synthesis (enhanced version has data explosion bug)
     graph.add_node("synthesis", _wrap(synthesis_node, settings))
 
     graph.set_entry_point("start")
     graph.add_edge("start", "data_collection")
+    
+    # PARALLEL EXECUTION: All independent analyses run in parallel after data collection
     graph.add_edge("data_collection", "technicals")
     graph.add_edge("data_collection", "fundamentals")
     graph.add_edge("data_collection", "news_sentiment")
     graph.add_edge("data_collection", "youtube")
     graph.add_edge("data_collection", "filing_analysis")
+    graph.add_edge("data_collection", "earnings_call_analysis")
     
-    # New integration: peer_analysis after fundamentals
+    # DEPENDENT ANALYSES: These need specific data from previous steps
     graph.add_edge("fundamentals", "peer_analysis")
-    
-    # New integration: analyst_recommendations after peer_analysis
     graph.add_edge("peer_analysis", "analyst_recommendations")
     
-    # Updated flow: cashflow after analyst_recommendations and filing_analysis
+    # CONVERGENCE POINT: All analyses converge to cashflow for synthesis
     graph.add_edge("technicals", "cashflow")
     graph.add_edge("analyst_recommendations", "cashflow")
     graph.add_edge("news_sentiment", "cashflow")
     graph.add_edge("youtube", "cashflow")
     graph.add_edge("filing_analysis", "cashflow")
+    graph.add_edge("earnings_call_analysis", "cashflow")
     
+    # FINAL SEQUENCE: These need to run in order for synthesis
+    # Use conditional edges to prevent duplicate execution
     graph.add_edge("cashflow", "leadership")
     graph.add_edge("leadership", "sector_macro")
-    
-    # New integration: growth_prospects after sector_macro
     graph.add_edge("sector_macro", "growth_prospects")
-    
-    # Enhanced valuation after growth_prospects
     graph.add_edge("growth_prospects", "valuation")
-    graph.add_edge("valuation", "synthesis")
+    graph.add_edge("valuation", "strategic_conviction")
+    graph.add_edge("strategic_conviction", "sector_rotation")
+    graph.add_edge("sector_rotation", "synthesis")
     graph.add_edge("synthesis", END)
 
     compiled = graph.compile()

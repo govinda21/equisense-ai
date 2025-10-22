@@ -1059,29 +1059,55 @@ class StrategicConvictionEngine:
     
     def _assess_geographic_expansion(self, ticker: str, info: Dict[str, Any]) -> Dict[str, Any]:
         """Assess geographic expansion potential"""
-        # Simplified geographic expansion assessment
         market_cap = info.get("marketCap", 0)
+        sector = info.get("sector", "").lower()
+        industry = info.get("industry", "").lower()
         
         if ticker.endswith(('.NS', '.BO')):
-            # Indian companies
-            if market_cap > 50e9:  # Large Indian companies
-                expansion_score = 70
-                expansion_desc = "Strong international presence"
-            elif market_cap > 10e9:  # Mid-cap Indian companies
-                expansion_score = 55
-                expansion_desc = "Moderate expansion potential"
+            # Indian companies - more nuanced assessment
+            base_score = 40  # Base score for Indian companies
+            
+            # Market cap adjustment
+            if market_cap > 100e9:  # Very large cap
+                base_score += 25
+            elif market_cap > 50e9:  # Large cap
+                base_score += 20
+            elif market_cap > 10e9:  # Mid-cap
+                base_score += 10
+            else:  # Small cap
+                base_score += 5
+            
+            # Sector-specific adjustments
+            if "banking" in sector or "financial" in sector:
+                # Banks have regulatory barriers for international expansion
+                base_score -= 15
+                expansion_desc = "Regulatory constraints limit international expansion"
+            elif "technology" in sector or "software" in sector:
+                # Tech companies can expand more easily
+                base_score += 20
+                expansion_desc = "Digital nature enables easier international expansion"
+            elif "pharmaceutical" in sector:
+                # Pharma has complex regulatory requirements
+                base_score -= 10
+                expansion_desc = "Regulatory complexity affects international expansion"
+            elif "energy" in sector or "oil" in sector:
+                # Energy companies often have global operations
+                base_score += 15
+                expansion_desc = "Energy sector typically has global operations"
             else:
-                expansion_score = 40
-                expansion_desc = "Limited geographic reach"
+                expansion_desc = "Moderate expansion potential"
         else:
             # Non-Indian companies (assume already global)
-            expansion_score = 60
+            base_score = 60
             expansion_desc = "Established global presence"
+        
+        # Ensure score is within bounds
+        expansion_score = min(100, max(0, base_score))
         
         return {
             "score": expansion_score,
             "description": expansion_desc,
-            "expansion_potential": "High" if expansion_score > 65 else "Medium" if expansion_score > 45 else "Low"
+            "expansion_potential": "High" if expansion_score > 70 else "Medium" if expansion_score > 50 else "Low"
         }
 
 

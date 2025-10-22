@@ -8,6 +8,8 @@ import { LoadingOverlay, Spinner, ProgressBar } from './components/LoadingStates
 import { ErrorState } from './components/ErrorStates'
 import { BulkStockInput } from './components/BulkStockInput'
 import { RankedStockList } from './components/RankedStockList'
+// import { AuthProvider, useAuth, LoginForm } from './components/Auth'  // Disabled for now
+// import { EnhancedDashboard } from './components/EnhancedDashboard'  // Disabled for now
 
 // Badge UI is currently unused; keep implementation minimal when needed next.
 
@@ -23,9 +25,15 @@ function Field({ id, label, hint, children }: { id: string; label: string; hint?
 
 interface AppProps {
   chatOpen: boolean
+  currentView: 'dashboard' | 'analysis'
+  onViewChange: (view: 'dashboard' | 'analysis') => void
 }
 
-function AppContent({ chatOpen }: AppProps) {
+// type ViewType = 'dashboard' | 'analysis';  // Removed - not used
+
+function AppContent({ chatOpen, currentView }: AppProps) {
+  // const { user, loading: authLoading } = useAuth()  // Disabled for now
+  // const user = { full_name: 'User' }  // Mock user for now - not used
   const [activeTab, setActiveTab] = useState<'single' | 'bulk'>('single')
   const [tickers, setTickers] = useState('RELIANCE')
   const [country, setCountry] = useState('India')
@@ -46,6 +54,50 @@ function AppContent({ chatOpen }: AppProps) {
   
   const toast = useToastHelpers()
   const countriesFetched = useRef(false)
+
+  // Show loading spinner while checking authentication - DISABLED
+  // if (authLoading) {
+  //   return (
+  //     <div className="min-h-screen flex items-center justify-center">
+  //       <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
+  //     </div>
+  //   )
+  // }
+
+  // Show login form if user is not authenticated - DISABLED
+  // if (!user) {
+  //   return <LoginForm />
+  // }
+
+  // Add navigation state for dashboard vs analysis - REMOVED (now passed as prop)
+  // const [currentView, setCurrentView] = useState<ViewType>('dashboard')
+
+  // Show dashboard or analysis based on current view
+  if (currentView === 'dashboard') {
+    return (
+      <div className="min-h-screen bg-gray-50 p-8">
+        <div className="max-w-4xl mx-auto">
+          <h1 className="text-3xl font-bold text-gray-900 mb-6">Dashboard</h1>
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-xl font-semibold mb-4">Welcome to Equisense AI</h2>
+            <p className="text-gray-600 mb-4">
+              This is a simplified dashboard view. The full dashboard is being loaded...
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <h3 className="font-semibold text-blue-900">Stock Analysis</h3>
+                <p className="text-blue-700 text-sm">Analyze individual stocks</p>
+              </div>
+              <div className="bg-green-50 p-4 rounded-lg">
+                <h3 className="font-semibold text-green-900">Bulk Ranking</h3>
+                <p className="text-green-700 text-sm">Compare multiple stocks</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // Fetch supported countries on component mount (with StrictMode protection)
   useEffect(() => {
@@ -277,7 +329,7 @@ function AppContent({ chatOpen }: AppProps) {
     }
   }
 
-  // Bulk analysis function
+  // Bulk analysis function with improved rate limiting
   const handleBulkAnalyze = async (tickerList: string[], mode: 'buy' | 'sell') => {
     console.log('Starting bulk analysis:', { tickerList, mode })
     setBulkLoading(true)
@@ -287,17 +339,23 @@ function AppContent({ chatOpen }: AppProps) {
     try {
       toast.info(`Analyzing ${tickerList.length} stocks...`, 'Bulk Analysis Started')
       
-      // Analyze stocks in batches of 5 to avoid overwhelming the server
-      const batchSize = 5
+      // Analyze stocks in smaller batches with delays to respect rate limits
+      const batchSize = 3  // Reduced batch size
+      const delayBetweenBatches = 2000  // 2 second delay between batches
       const results: any[] = []
       
       for (let i = 0; i < tickerList.length; i += batchSize) {
         const batch = tickerList.slice(i, i + batchSize)
         console.log(`Processing batch ${Math.floor(i/batchSize) + 1}:`, batch)
         
-        // Analyze batch
-        const batchPromises = batch.map(async (ticker) => {
+        // Analyze batch with individual delays
+        const batchPromises = batch.map(async (ticker, index) => {
           try {
+            // Add delay between individual requests within batch
+            if (index > 0) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+            }
+            
             const base = (import.meta as any).env.VITE_API_BASE_URL || 'http://localhost:8000'
             const res = await fetch(base + '/analyze', {
               method: 'POST',
@@ -367,12 +425,42 @@ function AppContent({ chatOpen }: AppProps) {
           `Analyzed ${Math.min(i + batchSize, tickerList.length)} of ${tickerList.length} stocks`,
           'Progress'
         )
+        
+        // Add delay between batches to respect rate limits
+        if (i + batchSize < tickerList.length) {
+          await new Promise(resolve => setTimeout(resolve, delayBetweenBatches))
+        }
       }
       
       console.log('All batches complete. Total results:', results.length)
       
-      // Sort by confidence for the selected mode
-      const sorted = results.sort((a, b) => b.confidenceScore - a.confidenceScore)
+      // Sort by recommendation strength first, then by confidence score
+      const sorted = results.sort((a, b) => {
+        // Define recommendation strength order for buy opportunities
+        const getRecommendationStrength = (rec: string) => {
+          const strengthMap: { [key: string]: number } = {
+            'Strong Buy': 7,
+            'Buy': 6,
+            'Hold': 5,
+            'Weak Hold': 4,
+            'Weak Sell': 3,
+            'Sell': 2,
+            'Strong Sell': 1
+          }
+          return strengthMap[rec] || 0
+        }
+        
+        const aStrength = getRecommendationStrength(a.recommendation)
+        const bStrength = getRecommendationStrength(b.recommendation)
+        
+        // First sort by recommendation strength (descending)
+        if (aStrength !== bStrength) {
+          return bStrength - aStrength
+        }
+        
+        // Then sort by confidence score (descending)
+        return b.confidenceScore - a.confidenceScore
+      })
       console.log('Sorted results:', sorted)
       setRankedStocks(sorted)
       
@@ -390,8 +478,8 @@ function AppContent({ chatOpen }: AppProps) {
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 to-blue-50 dark:from-slate-900 dark:to-slate-800">
-      <main className="flex-1 py-4 sm:py-6 md:py-8">
-        <div className="container px-3 sm:px-4 md:px-6">
+        <main className="flex-1 py-4 sm:py-6 md:py-8">
+          <div className="container px-3 sm:px-4 md:px-6">
 
           {/* Side-by-side Layout - Mobile Responsive */}
           <div className="flex flex-col lg:flex-row gap-4 sm:gap-6 min-h-[calc(100vh-180px)]">
@@ -586,11 +674,13 @@ function AppContent({ chatOpen }: AppProps) {
 }
 
 // Main App component with providers
-export default function App({ chatOpen }: AppProps) {
+export default function App({ chatOpen, currentView, onViewChange }: AppProps) {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <AppContent chatOpen={chatOpen} />
+        {/* <AuthProvider>  Disabled for now */}
+          <AppContent chatOpen={chatOpen} currentView={currentView} onViewChange={onViewChange} />
+        {/* </AuthProvider> */}
       </ToastProvider>
     </ErrorBoundary>
   )

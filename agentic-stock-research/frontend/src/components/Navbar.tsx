@@ -4,9 +4,11 @@ import { Icons } from './icons'
 interface NavbarProps {
   chatOpen?: boolean
   onChatToggle?: () => void
+  currentView?: 'dashboard' | 'analysis'
+  onViewChange?: (view: 'dashboard' | 'analysis') => void
 }
 
-export function Navbar({ chatOpen = false, onChatToggle }: NavbarProps) {
+export function Navbar({ chatOpen = false, onChatToggle, currentView = 'dashboard', onViewChange }: NavbarProps) {
   const [dark, setDark] = useState(false)
   useEffect(() => {
     const root = document.documentElement
@@ -27,6 +29,31 @@ export function Navbar({ chatOpen = false, onChatToggle }: NavbarProps) {
           </div>
         </div>
         <div className="flex items-center gap-3 text-sm">
+          {/* Navigation Buttons */}
+          {onViewChange && (
+            <div className="flex space-x-2">
+              <button
+                onClick={() => onViewChange('dashboard')}
+                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  currentView === 'dashboard'
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-blue-500 dark:hover:text-blue-300'
+                }`}
+              >
+                Dashboard
+              </button>
+              <button
+                onClick={() => onViewChange('analysis')}
+                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  currentView === 'analysis'
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-blue-500 dark:hover:text-blue-300'
+                }`}
+              >
+                Stock Analysis
+              </button>
+            </div>
+          )}
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded-full text-xs">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
             <span>Gemma3:4b Active</span>

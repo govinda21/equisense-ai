@@ -27,10 +27,10 @@ async def analyze_analyst_recommendations(ticker: str) -> Dict[str, Any]:
         except Exception:
             return None
 
-    def _fetch_analyst_data() -> Dict[str, Any]:
+    async def _fetch_analyst_data() -> Dict[str, Any]:
         try:
-            # Get company info and recommendations from yfinance
-            company_info = yf.Ticker(ticker).info or {}
+            # Get company info and recommendations using rate-limited client
+            company_info = await fetch_info(ticker)
             current_price = _safe_float(company_info.get("currentPrice") or company_info.get("regularMarketPrice"))
             
             # Extract analyst recommendation data
@@ -48,9 +48,15 @@ async def analyze_analyst_recommendations(ticker: str) -> Dict[str, Any]:
             
             # Try to get more detailed recommendation data with dates
             try:
-                ticker_obj = yf.Ticker(ticker)
-                recommendations_df = getattr(ticker_obj, "recommendations", None)
-                upgrades_downgrades_df = getattr(ticker_obj, "upgrades_downgrades", None)
+                # Use rate-limited client for additional data
+                from app.utils.rate_limiter import get_yahoo_client
+                yahoo_client = get_yahoo_client()
+                
+                # Get recommendations data using rate-limited client
+                loop = asyncio.get_event_loop()
+                ticker_obj = await loop.run_in_executor(None, lambda: yf.Ticker(ticker))
+                recommendations_df = await loop.run_in_executor(None, lambda: getattr(ticker_obj, "recommendations", None))
+                upgrades_downgrades_df = await loop.run_in_executor(None, lambda: getattr(ticker_obj, "upgrades_downgrades", None))
                 
                 recent_recommendations = []
                 data_freshness = {}
@@ -283,4 +289,4 @@ async def analyze_analyst_recommendations(ticker: str) -> Dict[str, Any]:
         
         return analysis
 
-    return await asyncio.to_thread(_fetch_analyst_data)
+    return await _fetch_analyst_data()

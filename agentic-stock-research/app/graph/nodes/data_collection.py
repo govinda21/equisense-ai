@@ -70,14 +70,14 @@ async def data_collection_node(state: ResearchState, settings: AppSettings) -> R
             logger.error(f"Error fetching data for {ticker}: {e}")
             return ticker, {"ohlcv_summary": {}, "info": {}}
     
-    # Use AsyncProcessor for controlled parallel execution
-    async with AsyncProcessor(max_workers=5) as processor:
+    # Use AsyncProcessor for controlled parallel execution with higher concurrency
+    async with AsyncProcessor(max_workers=10) as processor:  # Increased from 5 to 10
         # Fetch all ticker data in parallel with concurrency control
         fetch_tasks = [fetch_ticker_data(ticker) for ticker in tickers]
         results = await processor.gather_with_concurrency(
             *fetch_tasks,
             return_exceptions=True,
-            timeout=60.0  # 60 second timeout for all data collection
+            timeout=30.0  # Reduced from 60 to 30 seconds for faster failure detection
         )
     
     # Process results

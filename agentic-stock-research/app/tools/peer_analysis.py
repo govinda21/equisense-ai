@@ -25,10 +25,11 @@ async def analyze_peers(ticker: str) -> Dict[str, Any]:
         except Exception:
             return None
 
-    def _fetch_peer_data() -> Dict[str, Any]:
+    async def _fetch_peer_data() -> Dict[str, Any]:
         try:
-            # Get company info to identify sector/industry
-            company_info = yf.Ticker(ticker).info or {}
+            # Get company info to identify sector/industry using rate-limited client
+            from app.tools.finance import fetch_info
+            company_info = await fetch_info(ticker)
             sector = company_info.get("sector", "Unknown")
             industry = company_info.get("industry", "Unknown")
             market_cap = _safe_float(company_info.get("marketCap"))
@@ -102,7 +103,7 @@ async def analyze_peers(ticker: str) -> Dict[str, Any]:
             
             for peer in peers:
                 try:
-                    peer_info = yf.Ticker(peer).info or {}
+                    peer_info = await fetch_info(peer)
                     peer_metrics = _extract_metrics(peer_info)
                     if peer_metrics:
                         peer_data[peer] = peer_metrics
@@ -245,4 +246,4 @@ async def analyze_peers(ticker: str) -> Dict[str, Any]:
         percentile = int((rank / (len(valid_values) - 1)) * 100)
         return percentile
 
-    return await asyncio.to_thread(_fetch_peer_data)
+    return await _fetch_peer_data()

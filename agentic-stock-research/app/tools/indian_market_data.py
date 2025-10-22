@@ -92,23 +92,41 @@ class IndianMarketDataProvider:
         NSE requires a valid session with cookies to access API endpoints
         """
         try:
-            # Check if session is recent (< 5 minutes old)
+            # Check if session is recent (< 30 minutes old) - increased from 5 minutes
             if (self._session_cookies and self._session_timestamp and 
-                (datetime.now() - self._session_timestamp).seconds < 300):
+                (datetime.now() - self._session_timestamp).seconds < 1800):
+                logger.debug("Using cached NSE session cookies")
                 return self._session_cookies
             
-            # Visit NSE homepage to get cookies
-            homepage_response = await client.get("https://www.nseindia.com", headers=self.headers)
+            logger.info("Initializing new NSE session...")
             
-            if homepage_response.status_code == 200:
-                cookies = dict(homepage_response.cookies)
-                self._session_cookies = cookies
-                self._session_timestamp = datetime.now()
-                logger.info(f"NSE session initialized successfully with {len(cookies)} cookies")
-                return cookies
-            else:
-                logger.warning(f"Failed to initialize NSE session: {homepage_response.status_code}")
-                return {}
+            # Visit NSE homepage to get cookies with retry logic
+            for attempt in range(3):
+                try:
+                    homepage_response = await client.get(
+                        "https://www.nseindia.com", 
+                        headers=self.headers,
+                        timeout=15.0
+                    )
+                    
+                    if homepage_response.status_code == 200:
+                        cookies = dict(homepage_response.cookies)
+                        self._session_cookies = cookies
+                        self._session_timestamp = datetime.now()
+                        logger.info(f"NSE session initialized successfully with {len(cookies)} cookies")
+                        return cookies
+                    else:
+                        logger.warning(f"NSE homepage returned {homepage_response.status_code} (attempt {attempt + 1})")
+                        if attempt < 2:  # Don't sleep on last attempt
+                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                        
+                except Exception as e:
+                    logger.warning(f"NSE session attempt {attempt + 1} failed: {e}")
+                    if attempt < 2:
+                        await asyncio.sleep(2 ** attempt)
+            
+            logger.error("Failed to initialize NSE session after 3 attempts")
+            return {}
                 
         except Exception as e:
             logger.error(f"NSE session initialization error: {e}")
@@ -116,59 +134,49 @@ class IndianMarketDataProvider:
     
     async def get_shareholding_pattern(self, symbol: str, exchange: str = "NSE") -> List[ShareholdingPattern]:
         """
-        Fetch shareholding pattern data from NSE/BSE
+        Fetch shareholding pattern data using yfinance (no direct NSE API calls)
         """
         try:
-            if exchange.upper() == "NSE":
-                return await self._fetch_nse_shareholding(symbol)
-            elif exchange.upper() == "BSE":
-                return await self._fetch_bse_shareholding(symbol)
-            else:
-                logger.error(f"Unsupported exchange: {exchange}")
-                return []
+            logger.info(f"Fetching shareholding pattern for {symbol} using yfinance")
+            
+            # Use yfinance for basic company info
+            import yfinance as yf
+            
+            def _fetch_shareholding():
+                ticker_symbol = f"{symbol}.NS" if exchange.upper() == "NSE" else f"{symbol}.BO"
+                t = yf.Ticker(ticker_symbol)
+                info = t.info or {}
+                
+                # Extract shareholding data from yfinance info
+                patterns = []
+                
+                # Major holders data
+                if 'majorHoldersBreakdown' in info:
+                    breakdown = info['majorHoldersBreakdown']
+                    patterns.append(ShareholdingPattern(
+                        quarter=datetime.now().strftime("%Y-%m"),
+                        promoter_holding=breakdown.get('insidersPercentHeld', 0) / 100,
+                        fii_holding=breakdown.get('institutionsPercentHeld', 0) / 100,
+                        dii_holding=0,  # Not available in yfinance
+                        public_holding=breakdown.get('otherPercentHeld', 0) / 100,
+                        total_shares=info.get('sharesOutstanding', 0)
+                    ))
+                
+                return patterns
+            
+            result = await asyncio.to_thread(_fetch_shareholding)
+            logger.info(f"Successfully fetched shareholding pattern for {symbol}")
+            return result
+            
         except Exception as e:
             logger.error(f"Failed to fetch shareholding pattern for {symbol}: {e}")
             return []
     
-    async def _fetch_nse_shareholding(self, symbol: str) -> List[ShareholdingPattern]:
-        """Fetch shareholding pattern from NSE"""
-        try:
-            # NSE shareholding pattern endpoint
-            url = f"{self.nse_base_url}/corporates-shareholding-pattern"
-            
-            async with httpx.AsyncClient(timeout=30.0, headers=self.headers, follow_redirects=True) as client:
-                # Initialize session first to get cookies
-                cookies = await self._init_nse_session(client)
-                
-                # First get the company info to get the correct symbol format
-                company_url = f"{self.nse_base_url}/equity-meta-info"
-                params = {"symbol": symbol.upper()}
-                
-                response = await client.get(company_url, params=params, cookies=cookies)
-                
-                if response.status_code != 200:
-                    logger.warning(f"NSE company info request failed: {response.status_code} (cookies: {len(cookies)} present)")
-                    return []
-                
-                # Now fetch shareholding pattern
-                shareholding_params = {
-                    "symbol": symbol.upper(),
-                    "from_date": (datetime.now() - timedelta(days=365*2)).strftime("%d-%m-%Y"),
-                    "to_date": datetime.now().strftime("%d-%m-%Y")
-                }
-                
-                shareholding_response = await client.get(url, params=shareholding_params, cookies=cookies)
-                
-                if shareholding_response.status_code != 200:
-                    logger.warning(f"NSE shareholding request failed: {shareholding_response.status_code} (cookies: {len(cookies)} present)")
-                    return []
-                
-                data = shareholding_response.json()
-                return self._parse_nse_shareholding_data(data)
-                
-        except Exception as e:
-            logger.error(f"NSE shareholding fetch failed for {symbol}: {e}")
-            return []
+    # DEPRECATED: Old NSE API methods - replaced with yfinance
+    # async def _fetch_nse_shareholding(self, symbol: str) -> List[ShareholdingPattern]:
+    #     """DEPRECATED: Use yfinance instead of direct NSE API calls"""
+    #     logger.warning("_fetch_nse_shareholding is deprecated - use yfinance instead")
+    #     return []
     
     def _parse_nse_shareholding_data(self, data: Dict[str, Any]) -> List[ShareholdingPattern]:
         """Parse NSE shareholding pattern response"""
@@ -210,12 +218,57 @@ class IndianMarketDataProvider:
             return []
     
     async def get_corporate_actions(self, symbol: str, exchange: str = "NSE") -> List[CorporateAction]:
-        """Fetch corporate actions data"""
+        """Fetch corporate actions data using yfinance"""
         try:
-            if exchange.upper() == "NSE":
-                return await self._fetch_nse_corporate_actions(symbol)
-            else:
-                return []
+            logger.info(f"Fetching corporate actions for {symbol} using yfinance")
+            
+            # Use yfinance for corporate actions
+            import yfinance as yf
+            
+            def _fetch_corporate_actions():
+                ticker_symbol = f"{symbol}.NS" if exchange.upper() == "NSE" else f"{symbol}.BO"
+                t = yf.Ticker(ticker_symbol)
+                
+                actions = []
+                
+                # Get dividend data
+                try:
+                    dividends = t.dividends
+                    if not dividends.empty:
+                        for date, amount in dividends.tail(10).items():  # Last 10 dividends
+                            actions.append(CorporateAction(
+                                action_type="Dividend",
+                                ex_date=date,
+                                record_date=date,
+                                payment_date=date,
+                                amount=amount,
+                                description=f"Dividend of ₹{amount:.2f} per share"
+                            ))
+                except Exception as e:
+                    logger.debug(f"No dividend data available for {symbol}: {e}")
+                
+                # Get stock splits
+                try:
+                    splits = t.splits
+                    if not splits.empty:
+                        for date, ratio in splits.tail(5).items():  # Last 5 splits
+                            actions.append(CorporateAction(
+                                action_type="Stock Split",
+                                ex_date=date,
+                                record_date=date,
+                                payment_date=date,
+                                amount=ratio,
+                                description=f"Stock split {ratio}:1"
+                            ))
+                except Exception as e:
+                    logger.debug(f"No split data available for {symbol}: {e}")
+                
+                return actions
+            
+            result = await asyncio.to_thread(_fetch_corporate_actions)
+            logger.info(f"Successfully fetched {len(result)} corporate actions for {symbol}")
+            return result
+            
         except Exception as e:
             logger.error(f"Failed to fetch corporate actions for {symbol}: {e}")
             return []
@@ -237,7 +290,11 @@ class IndianMarketDataProvider:
                 
                 response = await client.get(url, params=params, cookies=cookies)
                 
-                if response.status_code != 200:
+                if response.status_code == 401:
+                    logger.warning(f"NSE authentication failed (401) for corporate actions - invalidating session")
+                    self._session_cookies = None
+                    return []
+                elif response.status_code != 200:
                     logger.warning(f"NSE corporate actions request failed: {response.status_code} (cookies: {len(cookies)} present)")
                     return []
                 
@@ -273,12 +330,63 @@ class IndianMarketDataProvider:
         return sorted(actions, key=lambda x: x.date, reverse=True)
     
     async def get_financial_filings(self, symbol: str, exchange: str = "NSE") -> List[FinancialFiling]:
-        """Fetch financial filings data"""
+        """Fetch financial filings data using yfinance"""
         try:
-            if exchange.upper() == "NSE":
-                return await self._fetch_nse_financial_filings(symbol)
-            else:
-                return []
+            logger.info(f"Fetching financial filings for {symbol} using yfinance")
+            
+            # Use yfinance for financial data
+            import yfinance as yf
+            
+            def _fetch_financial_filings():
+                ticker_symbol = f"{symbol}.NS" if exchange.upper() == "NSE" else f"{symbol}.BO"
+                t = yf.Ticker(ticker_symbol)
+                
+                filings = []
+                
+                # Get quarterly financials
+                try:
+                    quarterly = t.quarterly_financials
+                    if not quarterly.empty:
+                        for date in quarterly.columns:
+                            filing = FinancialFiling(
+                                filing_type="Quarterly Results",
+                                filing_date=date,
+                                period_end=date,
+                                revenue=quarterly.loc['Total Revenue', date] if 'Total Revenue' in quarterly.index else 0,
+                                net_income=quarterly.loc['Net Income', date] if 'Net Income' in quarterly.index else 0,
+                                eps=quarterly.loc['Basic EPS', date] if 'Basic EPS' in quarterly.index else 0,
+                                filing_url="",  # Not available in yfinance
+                                status="Filed"
+                            )
+                            filings.append(filing)
+                except Exception as e:
+                    logger.debug(f"No quarterly financials available for {symbol}: {e}")
+                
+                # Get annual financials
+                try:
+                    annual = t.financials
+                    if not annual.empty:
+                        for date in annual.columns:
+                            filing = FinancialFiling(
+                                filing_type="Annual Results",
+                                filing_date=date,
+                                period_end=date,
+                                revenue=annual.loc['Total Revenue', date] if 'Total Revenue' in annual.index else 0,
+                                net_income=annual.loc['Net Income', date] if 'Net Income' in annual.index else 0,
+                                eps=annual.loc['Basic EPS', date] if 'Basic EPS' in annual.index else 0,
+                                filing_url="",  # Not available in yfinance
+                                status="Filed"
+                            )
+                            filings.append(filing)
+                except Exception as e:
+                    logger.debug(f"No annual financials available for {symbol}: {e}")
+                
+                return filings
+            
+            result = await asyncio.to_thread(_fetch_financial_filings)
+            logger.info(f"Successfully fetched {len(result)} financial filings for {symbol}")
+            return result
+            
         except Exception as e:
             logger.error(f"Failed to fetch financial filings for {symbol}: {e}")
             return []
@@ -300,7 +408,11 @@ class IndianMarketDataProvider:
                 
                 response = await client.get(url, params=params, cookies=cookies)
                 
-                if response.status_code != 200:
+                if response.status_code == 401:
+                    logger.warning(f"NSE authentication failed (401) for financial filings - invalidating session")
+                    self._session_cookies = None
+                    return []
+                elif response.status_code != 200:
                     logger.warning(f"NSE financial filings request failed: {response.status_code} (cookies: {len(cookies)} present)")
                     return []
                 

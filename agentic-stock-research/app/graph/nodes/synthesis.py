@@ -9,6 +9,7 @@ from app.graph.state import ResearchState
 from app.graph.nodes.synthesis_common import (
     convert_numpy_types,
     score_to_action as _score_to_action,
+    score_to_action_with_conviction as _score_to_action_with_conviction,
     score_to_letter_grade as _score_to_letter_grade,
     score_to_stars as _score_to_stars,
     format_currency,
@@ -71,7 +72,7 @@ def _generate_star_display(score: float) -> str:
 def _generate_professional_rationale(score: float, action: str, positives: list, negatives: list, analysis: dict) -> str:
     """Generate formal investment analysis rationale"""
     # Extract key data points for rationale
-    fund = analysis.get("fundamentals", {})
+    fund = analysis.get("comprehensive_fundamentals", {})
     tech = analysis.get("technicals", {})
     growth = analysis.get("growth_prospects", {})
     cashflow = analysis.get("cashflow", {})
@@ -194,7 +195,7 @@ def _build_executive_summary(action: str, score: float, analysis: dict, positive
         parts: list[str] = []
         parts.append(f"{action}: {round(score * 100)}")
 
-        comp = analysis.get("fundamentals") or {}
+        comp = analysis.get("comprehensive_fundamentals") or {}
         dcf = comp.get("dcf_valuation") or {}
         iv = dcf.get("intrinsic_value")
         mos = dcf.get("margin_of_safety")
@@ -222,11 +223,31 @@ def _create_comprehensive_fundamentals_output(comprehensive_fund: dict) -> dict:
         trading_recs = comprehensive_fund.get("trading_recommendations", {})
         entry_zone = trading_recs.get("entry_zone", (0.0, 0.0))
         
+        # Get basic fundamentals data
+        basic_fundamentals = comprehensive_fund.get("basic_fundamentals", {})
+        
         return {
             "overall_score": comprehensive_fund.get("overall_score", 50.0),
             "overall_grade": comprehensive_fund.get("overall_grade", "C"),
             "recommendation": comprehensive_fund.get("recommendation", "Hold"),
             "confidence_level": comprehensive_fund.get("confidence_level", 0.5),
+            
+            # Basic fundamental metrics (from Yahoo Finance)
+            "pe_ratio": basic_fundamentals.get("pe_ratio"),
+            "pb_ratio": basic_fundamentals.get("pb_ratio"),
+            "market_cap": basic_fundamentals.get("market_cap"),
+            "current_price": basic_fundamentals.get("current_price"),
+            "roe": basic_fundamentals.get("roe"),
+            "debt_to_equity": basic_fundamentals.get("debt_to_equity"),
+            "current_ratio": basic_fundamentals.get("current_ratio"),
+            "gross_margins": basic_fundamentals.get("gross_margins"),
+            "operating_margins": basic_fundamentals.get("operating_margins"),
+            "dividend_yield": basic_fundamentals.get("dividend_yield"),
+            "beta": basic_fundamentals.get("beta"),
+            "volume": basic_fundamentals.get("volume"),
+            "avg_volume": basic_fundamentals.get("avg_volume"),
+            "eps": basic_fundamentals.get("eps"),
+            "target_price": basic_fundamentals.get("target_price"),
             
             # DCF Valuation
             "intrinsic_value": comprehensive_fund.get("dcf_valuation", {}).get("intrinsic_value"),
@@ -244,6 +265,7 @@ def _create_comprehensive_fundamentals_output(comprehensive_fund: dict) -> dict:
             "position_sizing_pct": trading_recs.get("position_sizing_pct", 1.0),
             "entry_zone_low": entry_zone[0] if isinstance(entry_zone, (list, tuple)) and len(entry_zone) > 0 else 0.0,
             "entry_zone_high": entry_zone[1] if isinstance(entry_zone, (list, tuple)) and len(entry_zone) > 1 else 0.0,
+            "entry_zone_explanation": trading_recs.get("entry_explanation", "Entry zone calculated using technical analysis"),
             "target_price": trading_recs.get("target_price", 0.0),
             "stop_loss": trading_recs.get("stop_loss", 0.0),
             "time_horizon_months": trading_recs.get("time_horizon_months", 12),
@@ -285,7 +307,7 @@ def _generate_senior_analyst_recommendation(
     """
     
     # Extract all available data
-    fund = analysis.get("fundamentals", {})
+    fund = analysis.get("comprehensive_fundamentals", {})
     tech = analysis.get("technicals", {})
     news = analysis.get("news_sentiment", {})
     analyst = analysis.get("analyst_recommendations", {})
@@ -335,7 +357,7 @@ def _generate_senior_analyst_recommendation(
     growth_drivers = _identify_growth_drivers(growth, strategic_conviction, fund)
     
     # 6. COMPETITIVE ADVANTAGES
-    competitive_advantages = _identify_competitive_advantages(strategic_conviction, fund, peer)
+    competitive_advantages = _identify_competitive_advantages(growth, strategic_conviction, fund, peer)
     
     # 7. KEY RISKS
     key_risks = _identify_key_risks(negatives, strategic_conviction, fund, sector_macro)
@@ -353,13 +375,15 @@ def _generate_senior_analyst_recommendation(
     industry_context = _build_industry_context(sector_macro, peer, analysis)
     
     # 12. SHORT-TERM OUTLOOK (3-6 months)
-    short_term_outlook = _build_short_term_outlook(action, score, tech, news, analyst)
+    short_term_outlook = _build_short_term_outlook(action, score, tech, news, analyst, fund, valuation)
     
     # 13. LONG-TERM OUTLOOK (12-36 months)
     long_term_outlook = _build_long_term_outlook(action, score, growth, strategic_conviction, fund)
     
     # 14. PRICE TARGET
-    price_target_12m, price_target_source = _determine_price_target(analyst, dcf, current_price, expected_return)
+    # Get DCF data from comprehensive fundamentals
+    comprehensive_dcf = fund.get("dcf_valuation", {}) if fund else {}
+    price_target_12m, price_target_source = _determine_price_target(analyst, comprehensive_dcf, current_price, expected_return)
     
     # 15. VALUATION BENCHMARK
     valuation_benchmark = _build_valuation_benchmark(valuation, fund, peer)
@@ -513,17 +537,96 @@ def _identify_growth_drivers(growth: dict, strategic_conviction: dict, fund: dic
     """Identify top 3-5 growth drivers"""
     drivers = []
     
-    # From growth prospects analysis
-    growth_catalysts = growth.get("growth_catalysts", [])
-    if growth_catalysts:
-        for catalyst in growth_catalysts[:2]:
-            if isinstance(catalyst, dict):
-                drivers.append(catalyst.get("name") or catalyst.get("description", "Growth catalyst identified"))
-            elif isinstance(catalyst, str):
-                drivers.append(catalyst)
+    # PRIORITY 1: From growth prospects analysis (most specific and data-driven)
+    if growth:
+        # Use sector-specific growth drivers from growth prospects
+        sector_analysis = growth.get("sector_analysis", {})
+        if sector_analysis.get("growth_drivers"):
+            drivers.extend(sector_analysis["growth_drivers"])
+        
+        # Use key metrics as additional drivers
+        if sector_analysis.get("key_metrics"):
+            drivers.extend(sector_analysis["key_metrics"])
+        
+        # Use growth outlook key factors
+        growth_outlook = growth.get("growth_outlook", {})
+        for period in ["short_term", "medium_term", "long_term"]:
+            period_data = growth_outlook.get(period, {})
+            if period_data.get("key_factors"):
+                drivers.extend(period_data["key_factors"])
+        
+        # Add specific growth metrics
+        historical_growth = growth.get("historical_growth", {})
+        metrics = historical_growth.get("metrics", {})
+        if metrics.get("revenue_growth_ttm") and metrics["revenue_growth_ttm"] > 0.05:
+            drivers.append(f"Strong revenue growth momentum ({metrics['revenue_growth_ttm']*100:.1f}% TTM)")
+        
+        if metrics.get("earnings_growth_ttm") and metrics["earnings_growth_ttm"] > 0.20:
+            drivers.append(f"Robust earnings growth ({metrics['earnings_growth_ttm']*100:.1f}% TTM)")
+        
+        # Add sector-specific insights
+        sector = sector_analysis.get("sector", "").lower()
+        if "energy" in sector or "oil" in sector:
+            drivers.append("Energy transition and renewable investments")
+            drivers.append("Global energy demand recovery")
+        elif "technology" in sector:
+            drivers.append("Digital transformation acceleration")
+        elif "banking" in sector or "financial" in sector:
+            drivers.append("Financial inclusion expansion")
+        elif "pharmaceutical" in sector:
+            drivers.append("Healthcare innovation and aging demographics")
     
-    # From strategic conviction
+    # PRIORITY 2: From strategic conviction growth catalysts (more specific than TAM)
     if strategic_conviction:
+        growth_runway = strategic_conviction.get("growth_runway", {})
+        if growth_runway:
+            # Use specific growth catalysts from strategic conviction
+            catalysts = growth_runway.get("growth_catalysts", [])
+            if catalysts:
+                for catalyst in catalysts[:2]:
+                    if isinstance(catalyst, dict):
+                        drivers.append(catalyst.get("name") or catalyst.get("description", "Strategic growth catalyst"))
+                    elif isinstance(catalyst, str):
+                        drivers.append(catalyst)
+            
+            # Use geographic expansion insights
+            geo_expansion = growth_runway.get("geographic_expansion", {})
+            if geo_expansion.get("expansion_potential") == "High":
+                drivers.append("Strong international expansion opportunities")
+    
+    # PRIORITY 3: From comprehensive fundamentals (company-specific metrics)
+    if fund:
+        # Revenue growth as a driver
+        revenue_growth = fund.get("revenue_growth") or fund.get("revenueGrowth")
+        if revenue_growth and revenue_growth > 0.15:
+            drivers.append(f"Sustained revenue growth momentum ({revenue_growth:.1f}% YoY)")
+        
+        # R&D and innovation
+        if fund.get("rd_intensity") and fund["rd_intensity"] > 0.10:
+            drivers.append("Strong R&D investment supporting innovation pipeline")
+        
+        # Market expansion opportunities
+        market_cap = fund.get("market_cap") or fund.get("marketCap")
+        if market_cap and market_cap > 10e9:  # Large cap
+            drivers.append("Scale advantages enabling market expansion")
+        
+        # Profitability-driven growth
+        operating_margin = fund.get("operating_margins") or fund.get("operatingMargins")
+        if operating_margin and operating_margin > 0.20:
+            drivers.append(f"High operating margins ({operating_margin*100:.1f}%) supporting reinvestment")
+        
+        # Debt capacity for growth
+        debt_to_equity = fund.get("debt_to_equity") or fund.get("debtToEquity")
+        if debt_to_equity and debt_to_equity < 0.5:
+            drivers.append("Low leverage providing capacity for strategic investments")
+        
+        # Cash generation for growth
+        free_cash_flow = fund.get("free_cash_flow") or fund.get("freeCashflow")
+        if free_cash_flow and free_cash_flow > 0:
+            drivers.append("Strong free cash flow generation supporting growth initiatives")
+    
+    # PRIORITY 4: Fallback to generic TAM analysis only if no specific drivers found
+    if not drivers and strategic_conviction:
         growth_runway = strategic_conviction.get("growth_runway", {})
         if growth_runway:
             tam_analysis = growth_runway.get("tam_analysis", {})
@@ -531,23 +634,39 @@ def _identify_growth_drivers(growth: dict, strategic_conviction: dict, fund: dic
                 cagr = tam_analysis["estimated_cagr"]
                 drivers.append(f"TAM expanding at {cagr}% CAGR")
     
-    # Revenue growth as a driver
-    revenue_growth = fund.get("revenue_growth") or fund.get("revenueGrowth")
-    if revenue_growth and revenue_growth > 0.15:
-        drivers.append(f"Sustained revenue growth momentum ({revenue_growth:.1f}% YoY)")
+    # Remove duplicates and limit to top 5
+    unique_drivers = []
+    for driver in drivers:
+        if driver not in unique_drivers:
+            unique_drivers.append(driver)
     
-    # R&D and innovation
-    if fund.get("rd_intensity") and fund["rd_intensity"] > 0.10:
-        drivers.append("Strong R&D investment supporting innovation pipeline")
-    
-    return drivers[:5] if drivers else ["Core business expansion opportunities"]
+    return unique_drivers[:5] if unique_drivers else ["Core business expansion opportunities"]
 
 
-def _identify_competitive_advantages(strategic_conviction: dict, fund: dict, peer: dict) -> List[str]:
+def _identify_competitive_advantages(growth: dict, strategic_conviction: dict, fund: dict, peer: dict) -> List[str]:
     """Identify 3-5 competitive advantages (moats)"""
     advantages = []
     
-    # From strategic conviction analysis
+    # PRIORITY 1: From growth prospects sector analysis (most specific)
+    if growth:
+        sector_analysis = growth.get("sector_analysis", {})
+        if sector_analysis.get("competitive_position"):
+            advantages.append(sector_analysis["competitive_position"])
+        
+        # Add sector-specific competitive advantages
+        sector = sector_analysis.get("sector", "").lower()
+        if "banking" in sector or "financial" in sector:
+            advantages.append("Branch network and customer relationships")
+            advantages.append("Regulatory compliance expertise")
+        elif "energy" in sector or "oil" in sector:
+            advantages.append("Integrated energy value chain")
+            advantages.append("Refining and petrochemicals expertise")
+        elif "technology" in sector:
+            advantages.append("Technology platform and ecosystem")
+        elif "pharmaceutical" in sector:
+            advantages.append("R&D pipeline and regulatory expertise")
+    
+    # PRIORITY 2: From strategic conviction analysis
     if strategic_conviction:
         business_quality = strategic_conviction.get("business_quality", {})
         if business_quality:
@@ -560,23 +679,56 @@ def _identify_competitive_advantages(strategic_conviction: dict, fund: dict, pee
                         advantages.append(f"{moat_type}: {evidence[0]}")
                     else:
                         advantages.append(moat_type)
+            
+            # Also check for key strengths
+            key_strengths = business_quality.get("key_strengths", [])
+            if key_strengths:
+                for strength in key_strengths[:2]:
+                    if isinstance(strength, str):
+                        advantages.append(strength)
     
-    # Market position advantage
-    market_cap = fund.get("market_cap") or fund.get("marketCap")
-    if market_cap and market_cap > 50e9:
-        advantages.append("Scale advantages from large market capitalization")
+    # PRIORITY 3: From comprehensive fundamentals (company-specific metrics)
+    if fund:
+        # Market position advantage
+        market_cap = fund.get("market_cap") or fund.get("marketCap")
+        if market_cap and market_cap > 50e9:
+            advantages.append("Scale advantages from large market capitalization")
+        
+        # Profitability advantage
+        gross_margins = fund.get("gross_margins") or fund.get("grossMargins")
+        if gross_margins and gross_margins > 0.50:
+            advantages.append(f"Superior gross margins ({gross_margins*100:.1f}%) indicating pricing power")
+        
+        # Operating efficiency
+        operating_margin = fund.get("operating_margins") or fund.get("operatingMargins")
+        if operating_margin and operating_margin > 0.20:
+            advantages.append(f"High operating margins ({operating_margin*100:.1f}%) showing operational excellence")
+        
+        # Financial strength
+        debt_to_equity = fund.get("debt_to_equity") or fund.get("debtToEquity")
+        if debt_to_equity and debt_to_equity < 0.3:
+            advantages.append("Strong balance sheet with low leverage")
+        
+        # ROE advantage
+        roe = fund.get("roe")
+        if roe and roe > 0.15:
+            advantages.append(f"Superior return on equity ({roe*100:.1f}%) indicating efficient capital use")
     
-    # Profitability advantage
-    gross_margins = fund.get("gross_margins") or fund.get("grossMargins")
-    if gross_margins and gross_margins > 0.50:
-        advantages.append(f"Superior gross margins ({gross_margins*100:.1f}%) indicating pricing power")
+    # PRIORITY 4: From peer analysis
+    if peer and peer.get("relative_position"):
+        pos = peer["relative_position"].lower()
+        if "leader" in pos or "outperform" in pos:
+            advantages.append("Market leadership position")
+        elif "average" in pos:
+            advantages.append("Competitive market position")
     
-    # Peer comparison advantage
-    relative_position = peer.get("relative_position", "")
-    if "outperform" in relative_position.lower() or "leader" in relative_position.lower():
-        advantages.append("Market leadership position relative to peers")
+    # Remove duplicates and limit to top 5
+    unique_advantages = []
+    for advantage in advantages:
+        if advantage not in unique_advantages:
+            unique_advantages.append(advantage)
     
-    return advantages[:5] if advantages else ["Established market presence"]
+    return unique_advantages[:5] if unique_advantages else ["Established market presence"]
 
 
 def _identify_key_risks(negatives: List[str], strategic_conviction: dict, fund: dict, sector_macro: dict) -> List[str]:
@@ -747,87 +899,253 @@ def _build_industry_context(sector_macro: dict, peer: dict, analysis: dict) -> s
     return "Industry context: " + "; ".join(parts) + "."
 
 
-def _build_short_term_outlook(action: str, score: float, tech: dict, news: dict, analyst: dict) -> str:
-    """Build 3-6 month short-term outlook"""
+def _build_short_term_outlook(action: str, score: float, tech: dict, news: dict, analyst: dict, fund: dict = None, valuation: dict = None) -> str:
+    """Build 3-6 month short-term outlook with actionable insights"""
     
-    # Determine technical momentum
+    # Extract specific data points for actionable insights
+    indicators = tech.get("indicators", {})
     signals = tech.get("signals", {})
-    trend = signals.get("trend", "neutral")
     
-    # Determine sentiment
+    # Technical indicators
+    rsi = indicators.get("rsi14", 50)
+    sma20 = indicators.get("sma20", 0)
+    sma50 = indicators.get("sma50", 0)
+    sma200 = indicators.get("sma200", 0)
+    current_price = indicators.get("current_price") or indicators.get("last_close", 0)
+    macd_data = indicators.get("macd", {})
+    macd_hist = macd_data.get("hist", 0)
+    momentum_20d = indicators.get("momentum20d", 0)
+    
+    # Technical signals
+    regime = signals.get("regime", "sideways")
+    tech_score = signals.get("score", 0.5)
+    
+    # News sentiment with specific details
     news_score = news.get("score", 0.5)
-    sentiment = "positive" if news_score > 0.6 else "neutral" if news_score > 0.4 else "cautious"
+    recent_news = news.get("recent_news", [])
     
+    # Analyst data
+    analyst_consensus = analyst.get("consensus", "Hold")
+    target_prices = analyst.get("target_prices", {})
+    analyst_mean_target = target_prices.get("mean", 0)
+    analyst_high_target = target_prices.get("high", 0)
+    analyst_low_target = target_prices.get("low", 0)
+    
+    # Current price and valuation metrics
+    current_price = fund.get("current_price") if fund else None
+    pe_ratio = fund.get("pe_ratio") if fund else None
+    pb_ratio = fund.get("pb_ratio") if fund else None
+    
+    # Build actionable insights based on data
+    insights = []
+    actionable_recommendations = []
+    
+    # Technical Analysis Insights
+    if rsi < 30:
+        insights.append(f"RSI at {rsi:.1f} indicates oversold conditions")
+        if action in ["Strong Buy", "Buy"]:
+            actionable_recommendations.append("Consider accumulating on any weakness below current levels")
+    elif rsi > 70:
+        insights.append(f"RSI at {rsi:.1f} suggests overbought territory")
+        if action in ["Hold", "Sell", "Strong Sell"]:
+            actionable_recommendations.append("Consider taking partial profits if holding long positions")
+    
+    # MACD Analysis
+    if macd_hist > 0:
+        insights.append("MACD histogram positive, indicating bullish momentum")
+        if action in ["Strong Buy", "Buy"]:
+            actionable_recommendations.append("Momentum supports near-term upside potential")
+    elif macd_hist < 0:
+        insights.append("MACD histogram negative, indicating bearish momentum")
+        if action in ["Sell", "Strong Sell"]:
+            actionable_recommendations.append("Momentum suggests continued weakness")
+    
+    # Moving Average Analysis
+    if current_price and sma20 and sma50:
+        if current_price > sma20 > sma50:
+            insights.append(f"Price above key moving averages (SMA20: ₹{sma20:.2f}, SMA50: ₹{sma50:.2f})")
+            if action in ["Strong Buy", "Buy"]:
+                actionable_recommendations.append("Technical trend supports bullish outlook")
+        elif current_price < sma20 < sma50:
+            insights.append(f"Price below key moving averages (SMA20: ₹{sma20:.2f}, SMA50: ₹{sma50:.2f})")
+            if action in ["Sell", "Strong Sell"]:
+                actionable_recommendations.append("Technical trend suggests bearish pressure")
+    
+    # Momentum Analysis
+    if momentum_20d > 0.05:  # 5% momentum
+        insights.append(f"Strong 20-day momentum: {momentum_20d*100:.1f}%")
+        if action in ["Strong Buy", "Buy"]:
+            actionable_recommendations.append("Momentum supports continued upward movement")
+    elif momentum_20d < -0.05:  # -5% momentum
+        insights.append(f"Negative 20-day momentum: {momentum_20d*100:.1f}%")
+        if action in ["Sell", "Strong Sell"]:
+            actionable_recommendations.append("Momentum suggests continued downward pressure")
+    
+    # Valuation Insights
+    if current_price and analyst_mean_target:
+        upside_potential = ((analyst_mean_target - current_price) / current_price) * 100
+        if upside_potential > 15:
+            insights.append(f"Analyst consensus suggests {upside_potential:.1f}% upside potential")
+            if action in ["Strong Buy", "Buy"]:
+                actionable_recommendations.append(f"Target price of ₹{analyst_mean_target:.2f} provides attractive risk-reward")
+        elif upside_potential < -10:
+            insights.append(f"Analyst consensus indicates {abs(upside_potential):.1f}% downside risk")
+            if action in ["Sell", "Strong Sell"]:
+                actionable_recommendations.append("Analyst targets suggest limited upside from current levels")
+    
+    # PE Ratio Analysis
+    if pe_ratio:
+        if pe_ratio < 15:
+            insights.append(f"PE ratio of {pe_ratio:.1f}x appears undervalued")
+            if action in ["Strong Buy", "Buy"]:
+                actionable_recommendations.append("Attractive valuation supports accumulation strategy")
+        elif pe_ratio > 25:
+            insights.append(f"PE ratio of {pe_ratio:.1f}x suggests premium valuation")
+            if action in ["Hold", "Sell"]:
+                actionable_recommendations.append("High valuation limits near-term upside potential")
+    
+    # News Sentiment Analysis
+    if recent_news:
+        positive_news_count = sum(1 for news_item in recent_news if news_item.get("sentiment", 0) > 0.5)
+        total_news = len(recent_news)
+        if positive_news_count / total_news > 0.7:
+            insights.append(f"Recent news flow is {positive_news_count}/{total_news} positive")
+            if action in ["Strong Buy", "Buy"]:
+                actionable_recommendations.append("Positive news sentiment supports near-term momentum")
+        elif positive_news_count / total_news < 0.3:
+            insights.append(f"Recent news flow is {positive_news_count}/{total_news} positive")
+            if action in ["Sell", "Strong Sell"]:
+                actionable_recommendations.append("Negative news sentiment may continue to pressure the stock")
+    
+    # Build the outlook with specific recommendations and technical score
     if action in ["Strong Buy", "Buy"]:
-        outlook = f"Near-term outlook remains {sentiment} supported by {trend} technical momentum. "
-        outlook += "We expect the stock to continue its positive trajectory over the next 3-6 months, "
-        outlook += "driven by operational momentum and favorable market conditions. "
-        outlook += "Any pullbacks should be viewed as accumulation opportunities for long-term investors."
+        outlook = f"Short-term outlook (3-6 months) is constructive with technical score of {tech_score:.2f}. "
+        if insights:
+            outlook += f"Key factors: {', '.join(insights[:3])}. "
+        if actionable_recommendations:
+            outlook += f"Action: {actionable_recommendations[0]}. "
+        outlook += "Monitor quarterly results and sector developments for confirmation."
     
     elif action == "Hold":
-        outlook = f"Short-term outlook is mixed with {trend} technical setup and {sentiment} sentiment. "
-        outlook += "We recommend patience while the investment thesis develops further clarity. "
-        outlook += "Monitor upcoming quarterly results and management guidance for directional cues. "
-        outlook += "Position adjustments may be warranted based on price action and fundamental developments."
+        outlook = f"Short-term outlook (3-6 months) is neutral with technical score of {tech_score:.2f}. "
+        if insights:
+            outlook += f"Mixed signals: {', '.join(insights[:2])}. "
+        outlook += "Wait for clearer directional cues from earnings or sector rotation. "
+        if actionable_recommendations:
+            outlook += f"Consider: {actionable_recommendations[0]}."
     
     else:  # Sell or Strong Sell
-        outlook = f"Near-term outlook appears challenging with {trend} technical momentum and {sentiment} sentiment. "
-        outlook += "We anticipate continued pressure over the next 3-6 months. "
-        outlook += "Investors should consider reducing exposure or implementing defensive strategies. "
-        outlook += "Re-evaluation warranted if fundamental conditions materially improve."
+        outlook = f"Short-term outlook (3-6 months) is challenging with technical score of {tech_score:.2f}. "
+        if insights:
+            outlook += f"Concerning factors: {', '.join(insights[:3])}. "
+        if actionable_recommendations:
+            outlook += f"Recommendation: {actionable_recommendations[0]}. "
+        outlook += "Risk management should be prioritized over potential upside."
     
     return outlook
 
 
 def _build_long_term_outlook(action: str, score: float, growth: dict, strategic_conviction: dict, fund: dict) -> str:
-    """Build 12-36 month long-term outlook"""
+    """Build 12-36 month long-term outlook using comprehensive fundamentals data"""
     
-    # Assess growth runway
-    growth_outlook = growth.get("growth_outlook", {})
-    if isinstance(growth_outlook, dict):
-        overall_outlook = growth_outlook.get("overall_outlook", "moderate")
+    # Use comprehensive fundamentals data (the correct source)
+    comp_fund = fund.get("comprehensive_fundamentals", {}) if fund else {}
+    
+    # Extract specific scores from comprehensive analysis
+    growth_score = comp_fund.get("growth_prospects_score", 50)
+    financial_health_score = comp_fund.get("financial_health_score", 50)
+    valuation_score = comp_fund.get("valuation_score", 50)
+    overall_score = comp_fund.get("overall_score", 50)
+    
+    # Extract key insights, catalysts, and risks
+    key_insights = comp_fund.get("key_insights", [])
+    key_catalysts = comp_fund.get("key_catalysts", [])
+    key_risks = comp_fund.get("key_risks", [])
+    
+    # Extract specific metrics
+    upside_potential = comp_fund.get("upside_potential", 0)
+    margin_of_safety = comp_fund.get("margin_of_safety", 0)
+    
+    # Build specific insights based on comprehensive analysis
+    insights = []
+    actionable_points = []
+    
+    # Growth Analysis based on comprehensive score
+    if growth_score >= 70:
+        insights.append(f"Strong growth prospects (score: {growth_score:.1f})")
+        if action in ["Strong Buy", "Buy"]:
+            actionable_points.append("Growth momentum supports long-term value creation")
+    elif growth_score <= 40:
+        insights.append(f"Weak growth prospects (score: {growth_score:.1f})")
+        if action in ["Hold", "Sell"]:
+            actionable_points.append("Limited growth potential constrains long-term upside")
     else:
-        overall_outlook = "moderate"
+        insights.append(f"Moderate growth prospects (score: {growth_score:.1f})")
     
-    # Assess conviction level
-    conviction_level = strategic_conviction.get("conviction_level", "Medium Conviction")
-    if not isinstance(conviction_level, str):
-        conviction_level = "Medium Conviction"
+    # Financial Health Analysis
+    if financial_health_score >= 70:
+        insights.append(f"Strong financial health (score: {financial_health_score:.1f})")
+        if action in ["Strong Buy", "Buy"]:
+            actionable_points.append("Robust financial position supports sustainable growth")
+    elif financial_health_score <= 40:
+        insights.append(f"Weak financial health (score: {financial_health_score:.1f})")
+        if action in ["Sell", "Strong Sell"]:
+            actionable_points.append("Financial concerns limit long-term value creation")
+    else:
+        insights.append(f"Moderate financial health (score: {financial_health_score:.1f})")
     
+    # Valuation Analysis
+    if valuation_score >= 70:
+        insights.append(f"Attractive valuation (score: {valuation_score:.1f})")
+        if action in ["Strong Buy", "Buy"]:
+            actionable_points.append("Undervalued position provides margin of safety")
+    elif valuation_score <= 40:
+        insights.append(f"Poor valuation (score: {valuation_score:.1f})")
+        if action in ["Hold", "Sell"]:
+            actionable_points.append("Overvaluation limits upside potential")
+    else:
+        insights.append(f"Fair valuation (score: {valuation_score:.1f})")
+    
+    # Use key insights from comprehensive analysis
+    if key_insights:
+        # Extract the most relevant insight (remove emoji and get clean text)
+        primary_insight = key_insights[0].replace("⚠️ ", "").replace("💰 ", "").replace("💸 ", "")
+        insights.append(primary_insight)
+    
+    # Use key catalysts for positive actions
+    if key_catalysts and action in ["Strong Buy", "Buy"]:
+        primary_catalyst = key_catalysts[0]
+        actionable_points.append(f"Key catalyst: {primary_catalyst}")
+    
+    # Use key risks for negative actions
+    if key_risks and action in ["Hold", "Sell", "Strong Sell"]:
+        primary_risk = key_risks[0]
+        actionable_points.append(f"Key risk: {primary_risk}")
+    
+    # Build the outlook with comprehensive analysis
     if action in ["Strong Buy", "Buy"]:
-        outlook = f"Long-term investment thesis remains compelling with {overall_outlook.lower()} growth prospects. "
-        
-        # Add growth drivers
-        growth_catalysts = growth.get("growth_catalysts", [])
-        if isinstance(growth_catalysts, list) and growth_catalysts:
-            first_catalyst = growth_catalysts[0]
-            if isinstance(first_catalyst, dict):
-                catalyst_name = first_catalyst.get('name', 'strategic initiatives')
-            else:
-                catalyst_name = str(first_catalyst)
-            outlook += f"Key catalysts include {catalyst_name}. "
-        
-        outlook += f"Our {conviction_level.lower()} suggests the company is well-positioned to deliver "
-        outlook += "above-market returns over the next 12-36 months. "
-        
-        # Add valuation perspective
-        dcf_val = fund.get("dcf_valuation", {})
-        if isinstance(dcf_val, dict) and dcf_val.get("upside_potential"):
-            upside = dcf_val["upside_potential"] * 100
-            outlook += f"Target upside potential of {upside:.0f}% reflects attractive risk-reward asymmetry for patient capital."
+        outlook = f"Long-term outlook (12-36 months) is constructive with overall score of {overall_score:.1f}. "
+        if insights:
+            outlook += f"Key strengths: {', '.join(insights[:3])}. "
+        if actionable_points:
+            outlook += f"Strategy: {actionable_points[0]}. "
+        outlook += "Comprehensive analysis supports above-market returns potential."
     
     elif action == "Hold":
-        outlook = f"Long-term outlook is balanced with {overall_outlook.lower()} growth visibility. "
-        outlook += "While the business fundamentals remain sound, current valuation limits asymmetric upside potential. "
-        outlook += "We maintain a neutral stance awaiting more favorable entry points or improved growth catalysts. "
-        outlook += "The investment thesis may evolve as the company executes on strategic initiatives and market conditions develop."
+        outlook = f"Long-term outlook (12-36 months) is balanced with overall score of {overall_score:.1f}. "
+        if insights:
+            outlook += f"Mixed factors: {', '.join(insights[:2])}. "
+        outlook += "Awaiting clearer growth catalysts or more attractive entry points. "
+        if actionable_points:
+            outlook += f"Monitor: {actionable_points[0]}."
     
     else:  # Sell or Strong Sell
-        outlook = f"Long-term outlook faces structural challenges with {overall_outlook.lower()} growth trajectory. "
-        outlook += "Fundamental concerns regarding competitive positioning and market dynamics suggest "
-        outlook += "below-market returns over the next 12-36 months. "
-        outlook += "Risk-reward profile remains unfavorable even for long-term investors. "
-        outlook += "Significant operational improvements and strategic repositioning required to revise our cautious stance."
+        outlook = f"Long-term outlook (12-36 months) faces challenges with overall score of {overall_score:.1f}. "
+        if insights:
+            outlook += f"Concerning factors: {', '.join(insights[:3])}. "
+        outlook += "Comprehensive analysis suggests below-market returns potential. "
+        if actionable_points:
+            outlook += f"Risk: {actionable_points[0]}."
     
     return outlook
 
@@ -842,17 +1160,88 @@ def _determine_price_target(analyst: dict, dcf: dict, current_price: Optional[fl
     if analyst_mean_target and analyst_mean_target > 0:
         return round(analyst_mean_target, 2), "Analyst consensus target"
     
-    # Priority 2: DCF intrinsic value
+    # Priority 2: DCF target price (not intrinsic value)
+    dcf_target_price = dcf.get("target_price")
+    if dcf_target_price and dcf_target_price > 0:
+        return round(dcf_target_price, 2), "DCF-based target price estimate"
+    
+    # Priority 3: DCF intrinsic value with 20% premium
     intrinsic_value = dcf.get("intrinsic_value")
     if intrinsic_value and intrinsic_value > 0:
-        return round(intrinsic_value, 2), "DCF-based intrinsic value estimate"
+        target_with_premium = intrinsic_value * 1.20  # 20% premium
+        return round(target_with_premium, 2), "DCF intrinsic value with 20% premium"
     
-    # Priority 3: Calculate from expected return
+    # Priority 4: Calculate from expected return
     if current_price and expected_return:
         implied_target = current_price * (1 + expected_return / 100)
         return round(implied_target, 2), "Derived from expected return estimate"
     
     return None, "Price target under evaluation"
+
+
+def _calculate_expected_return(analyst: dict, fund: dict, current_price: Optional[float]) -> float:
+    """Calculate expected return prioritizing analyst consensus targets over intrinsic value"""
+    
+    logger.info(f"DEBUG: _calculate_expected_return called with analyst={bool(analyst)}, fund={bool(fund)}, current_price={current_price}")
+    
+    # Priority 1: Analyst consensus target-based expected return
+    target_prices = analyst.get("target_prices", {})
+    analyst_mean_target = target_prices.get("mean")
+    
+    logger.info(f"DEBUG: analyst_mean_target={analyst_mean_target}")
+    
+    if analyst_mean_target and analyst_mean_target > 0 and current_price and current_price > 0:
+        analyst_return = ((analyst_mean_target - current_price) / current_price) * 100
+        if analyst_return > -50 and analyst_return < 200:  # Reasonable range
+            logger.info(f"Using analyst consensus expected return: {analyst_return:.1f}%")
+            return round(analyst_return, 1)
+    
+    # Priority 2: Analyst high/low target range (use midpoint)
+    analyst_high = target_prices.get("high")
+    analyst_low = target_prices.get("low")
+    if analyst_high and analyst_low and current_price and current_price > 0:
+        analyst_midpoint = (analyst_high + analyst_low) / 2
+        analyst_return = ((analyst_midpoint - current_price) / current_price) * 100
+        if analyst_return > -50 and analyst_return < 200:  # Reasonable range
+            logger.info(f"Using analyst midpoint expected return: {analyst_return:.1f}%")
+            return round(analyst_return, 1)
+    
+    # Priority 3: DCF target price-based expected return (not intrinsic value)
+    dcf_valuation = fund.get("dcf_valuation", {})
+    dcf_target_price = dcf_valuation.get("target_price")
+    if dcf_target_price and dcf_target_price > 0 and current_price and current_price > 0:
+        dcf_return = ((dcf_target_price - current_price) / current_price) * 100
+        if dcf_return > -50 and dcf_return < 200:  # Reasonable range
+            logger.info(f"Using DCF target price expected return: {dcf_return:.1f}%")
+            return round(dcf_return, 1)
+    
+    # Priority 4: DCF intrinsic value with 20% premium
+    intrinsic_value = dcf_valuation.get("intrinsic_value")
+    if intrinsic_value and intrinsic_value > 0 and current_price and current_price > 0:
+        target_with_premium = intrinsic_value * 1.20
+        intrinsic_return = ((target_with_premium - current_price) / current_price) * 100
+        if intrinsic_return > -50 and intrinsic_return < 200:  # Reasonable range
+            logger.info(f"Using DCF intrinsic value + 20% premium expected return: {intrinsic_return:.1f}%")
+            return round(intrinsic_return, 1)
+    
+    # Priority 5: Margin of safety (only if positive)
+    margin_of_safety = dcf_valuation.get("margin_of_safety")
+    if isinstance(margin_of_safety, (int, float)) and margin_of_safety > 0:
+        logger.info(f"Using positive margin of safety expected return: {margin_of_safety * 100:.1f}%")
+        return round(margin_of_safety * 100, 1)
+    
+    # Priority 6: Upside potential from trading recommendations
+    trading_rec = fund.get("trading_recommendations", {})
+    upside_potential = trading_rec.get("upside_potential")
+    if isinstance(upside_potential, (int, float)) and upside_potential > 0:
+        logger.info(f"Using upside potential expected return: {upside_potential * 100:.1f}%")
+        return round(upside_potential * 100, 1)
+    
+    # Fallback: Score-based expected return
+    overall_score = fund.get("overall_score", 50)
+    score_based_return = (overall_score - 50) * 0.8  # Scale to reasonable range
+    logger.info(f"Using score-based fallback expected return: {score_based_return:.1f}%")
+    return round(score_based_return, 1)
 
 
 def _build_valuation_benchmark(valuation: dict, fund: dict, peer: dict) -> str:
@@ -906,17 +1295,17 @@ def _calculate_base_score(analysis: dict) -> float:
     scores = []
     weights = []
     
-    # Technical Analysis (30% weight)
+    # Technical Analysis (25% weight) - reduced from 30%
     tech = analysis.get("technicals", {})
     signals = tech.get("signals", {})
     if signals.get("score") is not None:
         # Convert signal score from -1/+1 range to 0-1 range
         tech_score = max(0, min(1, (signals["score"] + 1) / 2))
         scores.append(tech_score)
-        weights.append(0.30)
+        weights.append(0.25)
     
-    # Fundamentals (25% weight)  
-    fund = analysis.get("fundamentals", {})
+    # Fundamentals (20% weight) - reduced from 25%  
+    fund = analysis.get("comprehensive_fundamentals", {})
     fund_score = 0.5  # Default neutral
     fund_factors = 0
     
@@ -956,9 +1345,9 @@ def _calculate_base_score(analysis: dict) -> float:
     if fund_factors > 0:
         fund_score = max(0, min(1, fund_score))
         scores.append(fund_score)
-        weights.append(0.25)
+        weights.append(0.20)
     
-    # Cash Flow (20% weight)
+    # Cash Flow (15% weight) - reduced from 20%
     cashflow = analysis.get("cashflow", {})
     cf_score = 0.5
     if cashflow.get("fcf_positive"):
@@ -967,9 +1356,16 @@ def _calculate_base_score(analysis: dict) -> float:
         cf_score += 0.2
     cf_score = max(0, min(1, cf_score))
     scores.append(cf_score)
-    weights.append(0.20)
+    weights.append(0.15)
     
-    # Peer Analysis (15% weight)
+    # Strategic Conviction (15% weight) - NEW
+    strategic_conviction = analysis.get("strategic_conviction", {})
+    if strategic_conviction.get("overall_conviction_score") is not None:
+        conviction_score = strategic_conviction["overall_conviction_score"] / 100.0
+        scores.append(conviction_score)
+        weights.append(0.15)
+    
+    # Peer Analysis (10% weight) - reduced from 15%
     peer = analysis.get("peer_analysis", {})
     if peer.get("relative_position"):
         pos = peer["relative_position"].lower()
@@ -980,9 +1376,9 @@ def _calculate_base_score(analysis: dict) -> float:
         else:
             peer_score = 0.3
         scores.append(peer_score)
-        weights.append(0.15)
+        weights.append(0.10)
     
-    # Analyst Recommendations (10% weight)
+    # Analyst Recommendations (10% weight) - unchanged
     analyst = analysis.get("analyst_recommendations", {})
     if analyst.get("consensus"):
         consensus = analyst["consensus"].lower()
@@ -994,6 +1390,13 @@ def _calculate_base_score(analysis: dict) -> float:
             analyst_score = 0.3
         scores.append(analyst_score)
         weights.append(0.10)
+    
+    # Sentiment Analysis (5% weight) - NEW
+    news = analysis.get("news_sentiment", {})
+    if news.get("score") is not None:
+        sentiment_score = max(0, min(1, (news["score"] + 1) / 2))  # Convert -1/+1 to 0-1
+        scores.append(sentiment_score)
+        weights.append(0.05)
     
     # Calculate weighted average
     if scores and weights:
@@ -1017,7 +1420,7 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
     news = a.get("news_sentiment", {})
     yt = a.get("youtube", {})
     tech = a.get("technicals", {})
-    fund = a.get("fundamentals", {})
+    fund = a.get("comprehensive_fundamentals", {})
     peer = a.get("peer_analysis", {})
     analyst = a.get("analyst_recommendations", {})
     cash = a.get("cashflow", {})
@@ -1026,14 +1429,24 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
     growth = a.get("growth_prospects", {})
     valuation = a.get("valuation", {})
     strategic_conviction = a.get("strategic_conviction", {})
+    sector_rotation = a.get("sector_rotation", {})
+    
+    # Get current price from comprehensive fundamentals or technicals
+    current_price = fund.get("current_price") or tech.get("current_price")
+    logger.info(f"DEBUG: current_price extracted: {current_price}")
     
     # DEBUG: Check what's in strategic_conviction
     logger.info(f"DEBUG synthesis: strategic_conviction data present: {bool(strategic_conviction)}, keys: {strategic_conviction.keys() if strategic_conviction else 'empty'}")
     if strategic_conviction:
         logger.info(f"DEBUG synthesis: strategic_conviction sample data - score: {strategic_conviction.get('overall_conviction_score')}, level: {strategic_conviction.get('conviction_level')}, recommendation: {strategic_conviction.get('strategic_recommendation')}")
+    
+    # DEBUG: Check what's in sector_rotation
+    logger.info(f"DEBUG synthesis: sector_rotation data present: {bool(sector_rotation)}, keys: {sector_rotation.keys() if sector_rotation else 'empty'}")
+    if sector_rotation:
+        logger.info(f"DEBUG synthesis: sector_rotation sample data - score: {sector_rotation.get('overall_score')}, recommendation: {sector_rotation.get('recommendation')}")
 
     # Check if comprehensive fundamentals analysis is available
-    fund = a.get("fundamentals", {})
+    fund = a.get("comprehensive_fundamentals", {})
     
     # Use comprehensive analysis if available, otherwise fall back to LLM
     if fund and fund.get("overall_score"):
@@ -1042,24 +1455,15 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
         # Convert 0-100 score to 0-1 scale
         composite_score = fund["overall_score"] / 100.0
         action = fund.get("recommendation", "Hold")
-        # Prefer comprehensive expected return if present, else infer from intrinsic value
-        tr = fund.get("trading_recommendations", {})
-        expected_return = None
-        try:
-            mos = fund.get("dcf_valuation", {}).get("margin_of_safety")
-            if isinstance(mos, (int, float)):
-                expected_return = round(mos * 100, 1)
-        except Exception:
-            expected_return = None
-        if expected_return is None:
-            try:
-                upside = tr.get("upside_potential")
-                if isinstance(upside, (int, float)):
-                    expected_return = round(upside * 100, 1)
-            except Exception:
-                pass
-        if expected_return is None:
-            expected_return = 0.0
+        
+        # Calculate expected return prioritizing analyst consensus targets
+        logger.info(f"DEBUG: About to calculate expected return with analyst={bool(analyst)}, fund={bool(fund)}, current_price={current_price}")
+        if analyst:
+            logger.info(f"DEBUG: Analyst data keys: {list(analyst.keys())}")
+            target_prices = analyst.get('target_prices', {})
+            logger.info(f"DEBUG: Target prices: {target_prices}")
+        expected_return = _calculate_expected_return(analyst, fund, current_price)
+        logger.info(f"DEBUG: Calculated expected return: {expected_return}%")
         
         # Extract factors from comprehensive analysis
         positives = []
@@ -1122,6 +1526,16 @@ Overall Outlook: {growth.get('growth_outlook', {}).get('overall_outlook', 'N/A')
 
 **Valuation:**
 {valuation.get('valuation_summary', 'No valuation data available')}
+
+**Strategic Conviction Analysis:**
+Conviction Score: {strategic_conviction.get('overall_conviction_score', 'N/A')}/100
+Conviction Level: {strategic_conviction.get('conviction_level', 'N/A')}
+Strategic Recommendation: {strategic_conviction.get('strategic_recommendation', 'N/A')}
+Position Sizing: {strategic_conviction.get('position_sizing_pct', 'N/A')}%
+Business Quality: {strategic_conviction.get('business_quality', {}).get('score', 'N/A')}/100
+Growth Runway: {strategic_conviction.get('growth_runway', {}).get('score', 'N/A')}/100
+Valuation Asymmetry: {strategic_conviction.get('valuation_asymmetry', {}).get('score', 'N/A')}/100
+Macro Resilience: {strategic_conviction.get('macro_resilience', {}).get('score', 'N/A')}/100
 
 Based on this analysis, provide:
 1. Overall score from 0-1 (0=strong sell, 0.5=neutral, 1=strong buy)
@@ -1194,13 +1608,23 @@ RETURN: [X.X]%"""
                     match = re.search(pattern, response_lower)
                     if match:
                         extracted_action = match.group(group).strip()
+                        
+                        # Get conviction level for threshold adjustment
+                        conviction_level = strategic_conviction.get("conviction_level", "Medium Conviction") if strategic_conviction else "Medium Conviction"
+                        
+                        # Apply conviction-adjusted thresholds to LLM-extracted action
                         if 'buy' in extracted_action:
-                            action = "Strong Buy" if 'strong' in extracted_action else "Buy"
+                            base_action = "Strong Buy" if 'strong' in extracted_action else "Buy"
                         elif 'sell' in extracted_action:
-                            action = "Strong Sell" if 'strong' in extracted_action else "Sell"
+                            base_action = "Strong Sell" if 'strong' in extracted_action else "Sell"
                         elif 'hold' in extracted_action:
-                            action = "Hold"
-                        logger.info(f"Parsed LLM action: {extracted_action} -> {action}")
+                            base_action = "Hold"
+                        else:
+                            base_action = "Hold"
+                        
+                        # Use conviction-adjusted thresholds to validate/adjust the LLM action
+                        action = _score_to_action_with_conviction(composite_score, conviction_level)
+                        logger.info(f"LLM extracted: {extracted_action} -> {base_action}, Conviction-adjusted: {action} (score: {composite_score}, conviction: {conviction_level})")
                         llm_parsed = True
                         break
                 
@@ -1280,7 +1704,14 @@ RETURN: [X.X]%"""
         # Generate consistent fallback reasons based on the score
         if not llm_parsed:
             logger.info("LLM parsing failed, generating fallback reasons based on score")
-            action = _score_to_action(composite_score)
+            
+            # Get conviction level for threshold adjustment
+            conviction_level = strategic_conviction.get("conviction_level", "Medium Conviction") if strategic_conviction else "Medium Conviction"
+            logger.info(f"Using conviction level: {conviction_level} for action determination")
+            
+            # Use conviction-adjusted thresholds
+            action = _score_to_action_with_conviction(composite_score, conviction_level)
+            logger.info(f"Conviction-adjusted action: {action} (score: {composite_score}, conviction: {conviction_level})")
             
             if composite_score >= 0.6:
                 positives = ["Strong fundamentals" if fund else "Favorable metrics", 
@@ -1296,8 +1727,8 @@ RETURN: [X.X]%"""
                            "Negative technicals" if tech else "Underperformance", 
                            "High risk factors"]
                            
-            # Calculate expected return based on score
-            expected_return = round((composite_score - 0.5) * 40, 1)
+            # Calculate expected return based on score, but try analyst targets first
+            expected_return = _calculate_expected_return(analyst, fund, current_price)
             
             logger.info(f"Generated fallback: action={action}, expected_return={expected_return}%")
 
@@ -1322,6 +1753,8 @@ RETURN: [X.X]%"""
                 "growth_prospects": {"summary": growth.get("summary", ""), "confidence": state.get("confidences", {}).get("growth_prospects", 0.5), "details": growth},
                 "valuation": {"summary": valuation.get("valuation_summary", ""), "confidence": state.get("confidences", {}).get("valuation", 0.5), "details": valuation},
                 "strategic_conviction": {"summary": strategic_conviction.get("strategic_recommendation", ""), "confidence": state.get("confidences", {}).get("strategic_conviction", 0.5), "details": strategic_conviction} if strategic_conviction else None,
+                "sector_rotation": {"summary": sector_rotation.get("recommendation", ""), "confidence": state.get("confidences", {}).get("sector_rotation", 0.5), "details": sector_rotation} if sector_rotation else None,
+                "earnings_call_analysis": a.get("earnings_calls") if a.get("earnings_calls") else None,
                 "comprehensive_fundamentals": _create_comprehensive_fundamentals_output(fund) if fund else None,
             }
         ],
@@ -1330,6 +1763,12 @@ RETURN: [X.X]%"""
     
     # DEBUG: About to create decision with professional fields
     logger.info(f"Creating decision object with score={composite_score}, action={action}")
+    
+    # DEBUG: Check earnings calls data
+    logger.info(f"DEBUG synthesis: analysis keys available: {list(a.keys())}")
+    logger.info(f"DEBUG synthesis: earnings_calls in analysis: {'earnings_calls' in a}")
+    if 'earnings_calls' in a:
+        logger.info(f"DEBUG synthesis: earnings_calls data: {a['earnings_calls']}")
     
     # Generate comprehensive senior equity analyst recommendation
     logger.info(f"Generating senior equity analyst recommendation for {ticker}")
@@ -1359,6 +1798,11 @@ RETURN: [X.X]%"""
                     "base_score": round(base_score, 3),
                     "professional_recommendation": _safe_get_professional_recommendation(action, composite_score),
                     "debug_test": "professional_fields_in_main_decision",
+                    
+                    # Strategic Conviction Integration
+                    "conviction_level": strategic_conviction.get("conviction_level", "Medium Conviction") if strategic_conviction else "Medium Conviction",
+                    "conviction_score": strategic_conviction.get("overall_conviction_score", 50.0) if strategic_conviction else 50.0,
+                    "strategic_recommendation": strategic_conviction.get("strategic_recommendation", "Hold") if strategic_conviction else "Hold",
                     
                     # Senior Equity Analyst Report Components
                     "executive_summary": senior_recommendation["executive_summary"],

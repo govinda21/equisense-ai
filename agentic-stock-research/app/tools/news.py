@@ -7,7 +7,7 @@ import httpx
 from datetime import datetime, timedelta
 import yfinance as yf
 
-from app.utils.retry import retry_async, circuit_breaker_async
+from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 

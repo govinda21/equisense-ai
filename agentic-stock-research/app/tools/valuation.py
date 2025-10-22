@@ -137,12 +137,27 @@ async def compute_valuation(ticker: str) -> Dict[str, Any]:
             # Multi-model valuation
             valuations = {}
             
-            # 1. DCF Analysis (Enhanced)
-            dcf_result = _enhanced_dcf_analysis(
-                fcf0, revenue_growth, discount_rate, terminal_growth,
-                shares_outstanding, market_cap, current_price
-            )
-            valuations["dcf"] = dcf_result
+            # 1. DCF Analysis (Enhanced) - Use our updated DCF valuation
+            from app.tools.dcf_valuation import perform_dcf_valuation
+            import asyncio
+            dcf_result = asyncio.run(perform_dcf_valuation(ticker))
+            if dcf_result:
+                valuations["dcf"] = {
+                    "applicable": True,
+                    "base_case": {
+                        "intrinsic_price": {
+                            "base": dcf_result.get("intrinsic_value")
+                        }
+                    },
+                    "methodology": "Enhanced DCF with conservative assumptions for Indian stocks"
+                }
+            else:
+                # Fallback to old DCF if new one fails
+                dcf_result = _enhanced_dcf_analysis(
+                    fcf0, revenue_growth, discount_rate, terminal_growth,
+                    shares_outstanding, market_cap, current_price
+                )
+                valuations["dcf"] = dcf_result
             
             # 2. Dividend Discount Model (if applicable)
             ddm_result = _dividend_discount_model(

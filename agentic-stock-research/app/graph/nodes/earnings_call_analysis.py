@@ -33,13 +33,19 @@ async def earnings_call_analysis_node(state: ResearchState, settings: AppSetting
     ticker = state["tickers"][0]
     logger.info(f"Starting earnings call analysis for {ticker}")
     
+    # DEBUG: Log state before analysis
+    logger.info(f"DEBUG earnings_call_analysis: state keys: {list(state.keys())}")
+    logger.info(f"DEBUG earnings_call_analysis: analysis keys: {list(state.get('analysis', {}).keys())}")
+    
     try:
         # Analyze earnings calls
+        logger.info(f"DEBUG earnings_call_analysis: About to call analyze_earnings_calls for {ticker}")
         earnings_analysis = await analyze_earnings_calls(
             ticker=ticker,
             days_back=180,  # Look back 6 months
             max_calls=3     # Analyze last 3 calls
         )
+        logger.info(f"DEBUG earnings_call_analysis: analyze_earnings_calls completed, result keys: {list(earnings_analysis.keys())}")
         
         # Process analysis results
         call_data = {
@@ -95,7 +101,13 @@ async def earnings_call_analysis_node(state: ResearchState, settings: AppSetting
             )
         
         else:
-            # No calls found
+            # No calls found - provide clear explanation
+            is_indian_stock = '.NS' in ticker.upper()
+            if is_indian_stock:
+                summary_message = f"No earnings call transcripts available for {ticker}. Indian stock earnings call data is not available through current free APIs (API Ninja, FMP). Consider using premium data sources or company investor relations websites for actual earnings call transcripts."
+            else:
+                summary_message = f"No recent earnings call transcripts available for {ticker}. This may be due to limited data availability or the company not conducting public earnings calls."
+            
             call_data.update({
                 "management_sentiment": {
                     "overall_sentiment": 0.0,
@@ -109,7 +121,7 @@ async def earnings_call_analysis_node(state: ResearchState, settings: AppSetting
                     "concerns_raised": [],
                     "new_initiatives": []
                 },
-                "summary_insights": "No recent earnings call transcripts available for analysis.",
+                "summary_insights": summary_message,
                 "confidence_score": 0.0
             })
         
@@ -120,6 +132,11 @@ async def earnings_call_analysis_node(state: ResearchState, settings: AppSetting
         state["analysis"]["earnings_calls"] = call_data
         
         logger.info(f"Earnings call analysis complete for {ticker}: {call_data['total_calls_analyzed']} calls analyzed")
+        
+        # DEBUG: Log state after analysis
+        logger.info(f"DEBUG earnings_call_analysis: state keys after: {list(state.keys())}")
+        logger.info(f"DEBUG earnings_call_analysis: analysis keys after: {list(state.get('analysis', {}).keys())}")
+        logger.info(f"DEBUG earnings_call_analysis: earnings_calls data: {call_data}")
         
         return state
     

@@ -6,11 +6,17 @@ import { Navbar } from './components/Navbar'
 
 export function Root() {
   const [chatOpen, setChatOpen] = useState(false)
+  const [currentView, setCurrentView] = useState<'dashboard' | 'analysis'>('analysis')  // Default to analysis
 
   return (
     <React.StrictMode>
-      <Navbar chatOpen={chatOpen} onChatToggle={() => setChatOpen(!chatOpen)} />
-      <App chatOpen={chatOpen} />
+      <Navbar 
+        chatOpen={chatOpen} 
+        onChatToggle={() => setChatOpen(!chatOpen)}
+        currentView={currentView}
+        onViewChange={setCurrentView}
+      />
+      <App chatOpen={chatOpen} currentView={currentView} onViewChange={setCurrentView} />
     </React.StrictMode>
   )
 }

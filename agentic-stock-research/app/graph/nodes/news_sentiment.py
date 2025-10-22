@@ -6,6 +6,7 @@ from app.config import AppSettings
 from app.graph.state import ResearchState
 from app.tools.nlp import sentiment_score, summarize_texts, _ollama_chat
 from app.tools.news import get_news_headlines_and_summaries, get_recent_news_summary
+from app.tools.valuepickr_scraper import analyze_valuepickr_sentiment
 import asyncio
 import logging
 
@@ -97,9 +98,36 @@ async def news_sentiment_node(state: ResearchState, settings: AppSettings) -> Re
         # Get structured news summary for detailed analysis
         news_data = await get_recent_news_summary(ticker)
         
-        # Analyze overall sentiment
+        # Fetch ValuePickr forum analysis for Indian stocks
+        valuepickr_analysis = None
+        if ticker.endswith('.NS') or ticker.endswith('.BO'):
+            try:
+                valuepickr_analysis = await analyze_valuepickr_sentiment(ticker, max_discussions=5)
+                logger.info(f"ValuePickr analysis for {ticker}: {valuepickr_analysis.get('status', 'unknown')}")
+            except Exception as e:
+                logger.warning(f"ValuePickr analysis failed for {ticker}: {e}")
+                valuepickr_analysis = {
+                    'status': 'error',
+                    'sentiment_score': 0.5,
+                    'sentiment_label': 'neutral',
+                    'summary': f'ValuePickr analysis unavailable for {ticker}',
+                    'confidence': 0.1
+                }
+        
+        # Analyze overall sentiment - combine news and ValuePickr sentiment
         texts = headlines if headlines else [f"Limited news coverage for {ticker}"]
-        sent = await sentiment_score(texts) if texts else 0.5
+        news_sentiment = await sentiment_score(texts) if texts else 0.5
+        
+        # Combine news and ValuePickr sentiment for Indian stocks
+        if valuepickr_analysis and valuepickr_analysis.get('status') == 'success':
+            valuepickr_sentiment = valuepickr_analysis.get('sentiment_score', 0.5)
+            valuepickr_confidence = valuepickr_analysis.get('confidence', 0.1)
+            
+            # Weighted average: 70% news, 30% ValuePickr for Indian stocks
+            sent = (news_sentiment * 0.7) + (valuepickr_sentiment * 0.3)
+            logger.info(f"Combined sentiment for {ticker}: News={news_sentiment:.2f}, ValuePickr={valuepickr_sentiment:.2f}, Combined={sent:.2f}")
+        else:
+            sent = news_sentiment
         
         # Enhanced confidence based on actual news availability and data quality
         base_confidence = 0.85 if len(headlines) >= 3 else 0.7 if len(headlines) >= 1 else 0.4
@@ -119,13 +147,31 @@ async def news_sentiment_node(state: ResearchState, settings: AppSettings) -> Re
         # Create professional sentiment summary
         professional_sentiment = get_professional_sentiment_label(sent, base_confidence)
         
-        # Format professional news summary
+        # Format professional news summary with ValuePickr integration
         if headlines:
             professional_summary = f"**Overall Sentiment:** {professional_sentiment}\n**News Headlines:**\n"
             for analysis in headline_analyses:
                 professional_summary += f"• {analysis['headline']} — {analysis['sentiment']}; {analysis['rationale']}.\n"
+            
+            # Add ValuePickr analysis for Indian stocks
+            if valuepickr_analysis and valuepickr_analysis.get('status') == 'success':
+                vp_sentiment = valuepickr_analysis.get('sentiment_label', 'neutral')
+                vp_summary = valuepickr_analysis.get('summary', '')
+                vp_discussions = valuepickr_analysis.get('engagement_metrics', {}).get('discussion_count', 0)
+                
+                professional_summary += f"\n**ValuePickr Community Sentiment:** {vp_sentiment.title()}\n"
+                professional_summary += f"• {vp_summary}\n"
+                if vp_discussions > 0:
+                    professional_summary += f"• Found {vp_discussions} active discussions on ValuePickr forum\n"
         else:
             professional_summary = f"**Overall Sentiment:** {professional_sentiment}\n**News Coverage:** Limited news coverage available for {ticker} at this time."
+            
+            # Add ValuePickr analysis even if no news
+            if valuepickr_analysis and valuepickr_analysis.get('status') == 'success':
+                vp_sentiment = valuepickr_analysis.get('sentiment_label', 'neutral')
+                vp_summary = valuepickr_analysis.get('summary', '')
+                professional_summary += f"\n**ValuePickr Community Sentiment:** {vp_sentiment.title()}\n"
+                professional_summary += f"• {vp_summary}\n"
         
         # Store both professional and legacy formats
         state.setdefault("analysis", {})["news_sentiment"] = {
@@ -137,7 +183,10 @@ async def news_sentiment_node(state: ResearchState, settings: AppSettings) -> Re
             "article_count": news_data.get("article_count", 0),
             "latest_date": news_data.get("latest_date"),
             "sources": news_data.get("sources", []),
-            "raw_articles": news_data.get("articles", [])
+            "raw_articles": news_data.get("articles", []),
+            "valuepickr_analysis": valuepickr_analysis,
+            "news_sentiment": news_sentiment,
+            "combined_sentiment": sent
         }
         
         state.setdefault("confidences", {})["news_sentiment"] = base_confidence

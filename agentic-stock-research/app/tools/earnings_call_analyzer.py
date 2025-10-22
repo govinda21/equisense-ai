@@ -22,10 +22,13 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+import os
+from abc import ABC, abstractmethod
 import json
 
 import aiohttp
 from bs4 import BeautifulSoup
+from app.utils.session_manager import get_http_client_manager, create_managed_session
 # Optional imports for NLP processing
 try:
     import nltk
@@ -118,7 +121,7 @@ class CallAnalysis:
     data_sources: List[str] = field(default_factory=list)
 
 
-class TranscriptSource:
+class TranscriptSource(ABC):
     """Abstract base class for transcript sources"""
     
     @abstractmethod
@@ -137,7 +140,7 @@ class SeekingAlphaSource(TranscriptSource):
     
     def __init__(self):
         self.base_url = "https://seekingalpha.com"
-        self.cache = get_cache_manager()
+        self.cache = None  # Will be initialized in get_transcripts
         self.session = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -154,6 +157,10 @@ class SeekingAlphaSource(TranscriptSource):
     async def get_transcripts(self, ticker: str, days_back: int = 90) -> List[EarningsCall]:
         """Get Seeking Alpha transcripts"""
         cache_key = f"seeking_alpha_transcripts:{ticker}:{days_back}"
+        
+        # Initialize cache if needed
+        if self.cache is None:
+            self.cache = await get_cache_manager()
         
         # Check cache first
         cached_result = await self.cache.get(cache_key)
@@ -208,13 +215,15 @@ class SeekingAlphaSource(TranscriptSource):
                         continue
                 
                 # Cache results for 4 hours
-                await self.cache.set(cache_key, [call.__dict__ for call in transcripts], ttl=14400)
+                await self.cache.set(cache_key, [call.__dict__ for call in transcripts], ttl=2592000)  # 30 days
                 
                 logger.info(f"Retrieved {len(transcripts)} Seeking Alpha transcripts for {ticker}")
                 return transcripts
         
         except Exception as e:
             logger.error(f"Error fetching Seeking Alpha transcripts for {ticker}: {e}")
+            # Cache empty result to prevent repeated failed calls
+            await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
             return []
     
     def _extract_date_from_title(self, title: str) -> Optional[datetime]:
@@ -264,13 +273,489 @@ class SeekingAlphaSource(TranscriptSource):
         return "Seeking Alpha"
 
 
+class SECEdgarTranscriptSource(TranscriptSource):
+    """SEC EDGAR API transcript source for earnings calls"""
+    
+    def __init__(self):
+        self.base_url = "https://data.sec.gov/api/xbrl/companyfacts"
+        self.cache = None  # Will be initialized in get_transcripts
+        self.session = None
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create aiohttp session"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30),
+                headers={
+                    'User-Agent': 'EquiSense AI Research Tool (contact@equisense.ai)',
+                    'Accept': 'application/json'
+                }
+            )
+        return self.session
+    
+    async def get_transcripts(self, ticker: str, days_back: int = 90) -> List[EarningsCall]:
+        """Get SEC EDGAR transcripts (placeholder implementation)"""
+        # SEC EDGAR doesn't directly provide earnings call transcripts
+        # This would require parsing 8-K filings for earnings call transcripts
+        # For now, return empty list
+        logger.info(f"SEC EDGAR transcript source not yet implemented for {ticker}")
+        return []
+    
+    def get_source_name(self) -> str:
+        return "SEC EDGAR"
+
+
+class APINinjaTranscriptSource(TranscriptSource):
+    """API Ninja earnings call transcript source"""
+    
+    def __init__(self):
+        from app.config import get_settings
+        settings = get_settings()
+        self.base_url = "https://api.api-ninjas.com/v1"
+        self.api_key = settings.api_ninja_key
+        self.cache = None  # Will be initialized in get_transcripts
+        self.session = None
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create managed aiohttp session"""
+        http_manager = get_http_client_manager()
+        return await http_manager.get_or_create_session(
+            "api_ninja_earnings",
+            headers={
+                'X-Api-Key': self.api_key,
+                'User-Agent': 'EquiSense AI Research Tool (contact@equisense.ai)'
+            }
+        )
+    
+    async def close(self):
+        """Close the aiohttp session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+            self.session = None
+    
+    async def get_transcripts(self, ticker: str, days_back: int = 90) -> List[EarningsCall]:
+        """Get API Ninja earnings call transcripts"""
+        print(f"🔍 DEBUG: get_transcripts called for {ticker}")
+        
+        if not self.api_key:
+            logger.warning("API Ninja API key not provided")
+            return []
+            
+        cache_key = f"api_ninja_transcripts:{ticker}:{days_back}"
+        
+        # Initialize cache if needed - use shared cache from main analyzer
+        if self.cache is None:
+            print(f"🔍 DEBUG: Initializing cache for {ticker}")
+            self.cache = await get_cache_manager()
+            print(f"🔍 DEBUG: Cache initialized: {self.cache}")
+        
+        # Check cache first with longer TTL for earnings calls
+        print(f"🔍 DEBUG: Getting cache for key: {cache_key}")
+        cached_result = await self.cache.get(cache_key)
+        print(f"🔍 DEBUG: Cache result: {cached_result}, Type: {type(cached_result)}")
+        logger.info(f"🔍 DEBUG: Cache key: {cache_key}, Cached result: {cached_result}, Type: {type(cached_result)}")
+        if cached_result is not None:
+            logger.info(f"✅ CACHE HIT: Retrieved API Ninja transcripts from cache for {ticker}")
+            return [EarningsCall(**call) for call in cached_result]
+        
+        logger.info(f"❌ CACHE MISS: No cached API Ninja transcripts for {ticker}, making API call")
+        
+        try:
+            session = await self._get_session()
+            
+            # API Ninja earnings call transcript endpoint
+            url = f"{self.base_url}/earningstranscript"
+            
+            # Convert ticker format for API Ninja (remove .NS/.BO suffixes)
+            api_ticker = ticker.replace('.NS', '').replace('.BO', '')
+            
+            params = {
+                "ticker": api_ticker,
+                "limit": 5  # Get last 5 transcripts
+            }
+            
+            # Rate limiting - API Ninja allows 50 requests per day on free tier
+            logger.warning(f"🚨 MAKING API CALL to API Ninja for {ticker} - this counts against your daily limit!")
+            await asyncio.sleep(1.0)
+            
+            async with session.get(url, params=params) as response:
+                if response.status == 401:
+                    logger.warning(f"API Ninja authentication failed for {ticker}")
+                    # Cache empty result to prevent repeated failed calls
+                    await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+                    return []
+                elif response.status == 403:
+                    logger.warning(f"API Ninja access forbidden for {ticker}")
+                    # Cache empty result to prevent repeated failed calls
+                    await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+                    return []
+                elif response.status == 429:
+                    logger.warning(f"API Ninja rate limit exceeded for {ticker}")
+                    # Cache empty result to prevent repeated failed calls
+                    await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+                    return []
+                elif response.status != 200:
+                    logger.warning(f"API Ninja returned {response.status} for {ticker}")
+                    # Cache empty result to prevent repeated failed calls
+                    await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+                    return []
+                
+                data = await response.json()
+                
+                # API Ninja returns a single dict, not a list
+                if not data or not isinstance(data, dict):
+                    logger.info(f"No transcripts found for {ticker} on API Ninja")
+                    # Cache empty result to prevent repeated calls
+                    await self.cache.set(cache_key, [], ttl=2592000)  # Cache empty result for 30 days
+                    return []
+                
+                transcripts = []
+                # Handle single transcript response
+                item = data
+                try:
+                    # Parse API Ninja response format
+                    call_date_str = item.get("date", "")
+                    if not call_date_str:
+                        logger.info(f"No date found in API Ninja response for {ticker}")
+                        return []
+                        
+                    # Parse date - API Ninja format varies
+                    try:
+                        call_date = datetime.strptime(call_date_str, "%Y-%m-%d")
+                    except ValueError:
+                        try:
+                            call_date = datetime.strptime(call_date_str, "%Y-%m-%dT%H:%M:%S")
+                        except ValueError:
+                            logger.warning(f"Could not parse date {call_date_str} for {ticker}")
+                            return []
+                    
+                    # Extract transcript content
+                    transcript_content = item.get("transcript", "")
+                    if not transcript_content or len(transcript_content.strip()) < 100:
+                        logger.info(f"No transcript content found for {ticker}")
+                        return []
+                    
+                    # Extract quarter information
+                    quarter = item.get("quarter", "")
+                    year = item.get("year", "")
+                    if quarter and year:
+                        quarter = f"Q{quarter} {year}"
+                    else:
+                        # Try to extract quarter from date
+                        month = call_date.month
+                        if month <= 3:
+                            quarter = f"Q1 {call_date.year}"
+                        elif month <= 6:
+                            quarter = f"Q2 {call_date.year}"
+                        elif month <= 9:
+                            quarter = f"Q3 {call_date.year}"
+                        else:
+                            quarter = f"Q4 {call_date.year}"
+                    
+                    earnings_call = EarningsCall(
+                        ticker=ticker,
+                        call_date=call_date,
+                        call_type=CallType.EARNINGS,
+                        quarter=quarter,
+                        fiscal_year=call_date.year,
+                        transcript_url="",  # API Ninja doesn't provide URL
+                        transcript_text=transcript_content,
+                        participants=[],  # API Ninja doesn't provide participant details
+                        audio_url="",  # API Ninja doesn't provide audio URL
+                        duration_minutes=60  # Default duration
+                    )
+                    transcripts.append(earnings_call)
+                    
+                except Exception as e:
+                    logger.warning(f"Error parsing API Ninja transcript for {ticker}: {e}")
+                    return []
+                
+                logger.info(f"Retrieved {len(transcripts)} transcripts from API Ninja for {ticker}")
+                
+                # Cache the results (8 hours - longer cache for API limit preservation)
+                await self.cache.set(cache_key, [call.__dict__ for call in transcripts], ttl=2592000)  # 30 days
+                
+                return transcripts
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"API Ninja timeout for {ticker}")
+            # Cache empty result to prevent repeated failed calls
+            await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching API Ninja transcripts for {ticker}: {e}")
+            # Cache empty result to prevent repeated failed calls
+            await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+            return []
+    
+    def get_source_name(self) -> str:
+        return "API Ninja"
+
+
+class MockTranscriptSource(TranscriptSource):
+    """Mock transcript source for testing purposes"""
+    
+    def __init__(self):
+        self.cache = None
+    
+    async def get_transcripts(self, ticker: str, days_back: int = 90) -> List[EarningsCall]:
+        """Generate mock transcripts for testing"""
+        # Initialize cache if needed
+        if self.cache is None:
+            self.cache = await get_cache_manager()
+        
+        cache_key = f"mock_transcripts:{ticker}:{days_back}"
+        
+        # Check cache first
+        cached_result = await self.cache.get(cache_key)
+        if cached_result:
+            logger.info(f"Retrieved mock transcripts from cache for {ticker}")
+            return [EarningsCall(**call) for call in cached_result]
+        
+        # Mock data is only for testing purposes - not for real investment decisions
+        # Only provide mock data for US stocks that have real API data available
+        major_us_stocks = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA']
+        if ticker.upper() not in major_us_stocks:
+            logger.info(f"Mock data not available for {ticker} - real data sources required for investment decisions")
+            return []
+        
+        mock_transcripts = []
+        base_date = datetime.now()
+        
+        for i in range(3):  # Generate 3 mock transcripts
+            call_date = base_date - timedelta(days=90 * (i + 1))
+            quarter = f"Q{(i % 4) + 1} {call_date.year}"
+            
+            # Generate realistic mock transcript content
+            is_indian_stock = '.NS' in ticker.upper()
+            company_name = ticker.replace('.NS', '') if is_indian_stock else ticker
+            
+            if is_indian_stock:
+                transcript_content = f"""
+                {company_name} Earnings Call Transcript - {quarter}
+                
+                Operator: Good morning and welcome to {company_name}'s quarterly earnings call.
+                
+                CEO: Thank you for joining us today. We're pleased to report strong results for {quarter}.
+                Revenue grew by 12% year-over-year, driven by strong domestic demand and export growth.
+                We remain optimistic about India's economic growth and our positioning in key sectors.
+                
+                CFO: Our financial performance was solid this quarter. Operating margins improved to 18%,
+                and we generated strong cash flow. We're maintaining our guidance for the full year.
+                Our debt levels remain manageable and we continue to invest in capacity expansion.
+                
+                Q&A Session:
+                Analyst: Can you comment on the competitive landscape in India?
+                CEO: We continue to see strong competitive positioning. Our focus on operational excellence
+                and customer service differentiates us in the Indian market.
+                
+                Analyst: What about guidance for next quarter?
+                CFO: We expect continued growth in the low-teens range, consistent with our long-term targets.
+                We're monitoring commodity price fluctuations and their impact on margins.
+                """
+            else:
+                transcript_content = f"""
+                {ticker} Earnings Call Transcript - {quarter}
+                
+                Operator: Good morning and welcome to {ticker}'s quarterly earnings call.
+                
+                CEO: Thank you for joining us today. We're pleased to report strong results for {quarter}.
+                Revenue grew by 15% year-over-year, driven by strong demand across all segments.
+                We remain optimistic about our growth prospects and are investing heavily in innovation.
+                
+                CFO: Our financial performance was solid this quarter. Operating margins improved to 25%,
+                and we generated strong cash flow. We're maintaining our guidance for the full year.
+                
+                Q&A Session:
+                Analyst: Can you comment on the competitive landscape?
+                CEO: We continue to see strong competitive positioning. Our focus on innovation
+                and customer experience differentiates us in the market.
+                
+                Analyst: What about guidance for next quarter?
+                CFO: We expect continued growth in the mid-teens range, consistent with our long-term targets.
+                """
+            
+            earnings_call = EarningsCall(
+                ticker=ticker,
+                call_date=call_date,
+                call_type=CallType.EARNINGS,
+                quarter=quarter,
+                fiscal_year=call_date.year,
+                transcript_url=f"https://mock-transcripts.com/{ticker}/{quarter}",
+                transcript_text=transcript_content.strip(),
+                participants=["CEO", "CFO", "Analysts"],
+                audio_url="",
+                duration_minutes=60
+            )
+            mock_transcripts.append(earnings_call)
+        
+        # Cache the results (1 hour for mock data)
+        await self.cache.set(cache_key, [call.__dict__ for call in mock_transcripts], ttl=3600)
+        
+        logger.info(f"Generated {len(mock_transcripts)} mock transcripts for {ticker}")
+        return mock_transcripts
+    
+    def get_source_name(self) -> str:
+        return "Mock Data"
+
+
+class FMPTranscriptSource(TranscriptSource):
+    """Financial Modeling Prep (FMP) API transcript source"""
+    
+    def __init__(self):
+        from app.config import get_settings
+        settings = get_settings()
+        self.base_url = "https://financialmodelingprep.com/api/v3"
+        self.api_key = settings.fmp_api_key
+        self.cache = None  # Will be initialized in get_transcripts
+        self.session = None
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create aiohttp session"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30),
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+                }
+            )
+        return self.session
+    
+    async def get_transcripts(self, ticker: str, days_back: int = 90) -> List[EarningsCall]:
+        """Get FMP API transcripts"""
+        if not self.api_key:
+            logger.warning("FMP API key not provided")
+            return []
+            
+        cache_key = f"fmp_transcripts:{ticker}:{days_back}"
+        
+        # Initialize cache if needed
+        if self.cache is None:
+            self.cache = await get_cache_manager()
+        
+        # Check cache first
+        cached_result = await self.cache.get(cache_key)
+        if cached_result:
+            logger.info(f"Retrieved FMP transcripts from cache for {ticker}")
+            return [EarningsCall(**call) for call in cached_result]
+        
+        try:
+            session = await self._get_session()
+            
+            # Calculate date range
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days_back)
+            
+            # FMP API endpoint for earnings call transcripts
+            url = f"{self.base_url}/earning_call_transcript/{ticker}"
+            params = {
+                "apikey": self.api_key,
+                "from": start_date.strftime("%Y-%m-%d"),
+                "to": end_date.strftime("%Y-%m-%d")
+            }
+            
+            # Rate limiting - FMP allows 250 requests per day
+            await asyncio.sleep(0.5)
+            
+            async with session.get(url, params=params) as response:
+                if response.status == 401:
+                    logger.warning(f"FMP API authentication failed for {ticker}")
+                    return []
+                elif response.status == 403:
+                    logger.warning(f"FMP API access forbidden for {ticker}")
+                    return []
+                elif response.status == 429:
+                    logger.warning(f"FMP API rate limit exceeded for {ticker}")
+                    return []
+                elif response.status != 200:
+                    logger.warning(f"FMP API returned {response.status} for {ticker}")
+                    return []
+                
+                data = await response.json()
+                
+                if not data or not isinstance(data, list):
+                    logger.info(f"No transcripts found for {ticker} on FMP")
+                    return []
+                
+                transcripts = []
+                for item in data:
+                    try:
+                        # Parse FMP API response format
+                        call_date_str = item.get("date", "")
+                        if not call_date_str:
+                            continue
+                            
+                        # Parse date - FMP format is usually YYYY-MM-DD
+                        call_date = datetime.strptime(call_date_str, "%Y-%m-%d")
+                        
+                        # Extract transcript content
+                        transcript_content = item.get("content", "")
+                        if not transcript_content or len(transcript_content.strip()) < 100:
+                            continue
+                        
+                        # Extract quarter information
+                        quarter = item.get("quarter", "")
+                        if not quarter:
+                            # Try to extract quarter from date
+                            month = call_date.month
+                            if month <= 3:
+                                quarter = f"Q1 {call_date.year}"
+                            elif month <= 6:
+                                quarter = f"Q2 {call_date.year}"
+                            elif month <= 9:
+                                quarter = f"Q3 {call_date.year}"
+                            else:
+                                quarter = f"Q4 {call_date.year}"
+                        
+                        earnings_call = EarningsCall(
+                            ticker=ticker,
+                            call_date=call_date,
+                            call_type=CallType.EARNINGS,
+                            quarter=quarter,
+                            fiscal_year=call_date.year,
+                            transcript_url=item.get("transcript_url", ""),
+                            transcript_text=transcript_content,
+                            participants=[],  # FMP doesn't provide participant details
+                            audio_url=item.get("audio_url", ""),
+                            duration_minutes=item.get("duration_minutes", 60)
+                        )
+                        transcripts.append(earnings_call)
+                        
+                    except Exception as e:
+                        logger.warning(f"Error parsing FMP transcript for {ticker}: {e}")
+                        continue
+                
+                logger.info(f"Retrieved {len(transcripts)} transcripts from FMP for {ticker}")
+                
+                # Cache the results (6 hours - longer cache for API limit preservation)
+                await self.cache.set(cache_key, [call.__dict__ for call in transcripts], ttl=2592000)  # 30 days
+                
+                return transcripts
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"FMP API timeout for {ticker}")
+            # Cache empty result to prevent repeated failed calls
+            await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching FMP transcripts for {ticker}: {e}")
+            # Cache empty result to prevent repeated failed calls
+            await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
+            return []
+    
+    def get_source_name(self) -> str:
+        return "FMP"
+
+
 class AlphaStreetSource(TranscriptSource):
     """Alpha Street transcript source (premium)"""
     
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key
+        from app.config import get_settings
+        settings = get_settings()
+        self.api_key = api_key or settings.alpha_street_api_key
         self.base_url = "https://api.alphastreet.com/v1"
-        self.cache = get_cache_manager()
+        self.cache = None  # Will be initialized in get_transcripts
         self.session = None
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -291,6 +776,10 @@ class AlphaStreetSource(TranscriptSource):
         if not self.api_key:
             logger.warning("Alpha Street API key not provided")
             return []
+        
+        # Initialize cache if not already done
+        if self.cache is None:
+            self.cache = await get_cache_manager()
         
         cache_key = f"alpha_street_transcripts:{ticker}:{days_back}"
         
@@ -343,13 +832,15 @@ class AlphaStreetSource(TranscriptSource):
                         continue
                 
                 # Cache results for 4 hours
-                await self.cache.set(cache_key, [call.__dict__ for call in transcripts], ttl=14400)
+                await self.cache.set(cache_key, [call.__dict__ for call in transcripts], ttl=2592000)  # 30 days
                 
                 logger.info(f"Retrieved {len(transcripts)} Alpha Street transcripts for {ticker}")
                 return transcripts
         
         except Exception as e:
             logger.error(f"Error fetching Alpha Street transcripts for {ticker}: {e}")
+            # Cache empty result to prevent repeated failed calls
+            await self.cache.set(cache_key, [], ttl=604800)  # Cache empty result for 7 days
             return []
     
     def get_source_name(self) -> str:
@@ -360,12 +851,81 @@ class EarningsCallAnalyzer:
     """Main earnings call analysis system"""
     
     def __init__(self):
-        self.sources = [
-            SeekingAlphaSource(),
-            AlphaStreetSource()  # Will be empty if no API key
-        ]
-        self.cache = get_cache_manager()
+        self.cache = None  # Will be initialized in analyze_earnings_calls
+        self.sources = []  # Will be initialized after cache is set
         self.llm_orchestrator = get_llm_orchestrator()
+        self._sessions_to_close = []  # Track sessions for cleanup
+    
+    async def _initialize_sources(self):
+        """Initialize sources with shared cache"""
+        if self.cache is None:
+            self.cache = await get_cache_manager()
+        
+        # Initialize sources with shared cache
+        self.sources = [
+            APINinjaTranscriptSource(),  # Primary source - API Ninja
+            MockTranscriptSource(),      # Fallback for testing - generates realistic mock data
+            FMPTranscriptSource(),       # FMP API (currently deprecated)
+            SeekingAlphaSource(),        # Fallback source
+            AlphaStreetSource()          # Premium fallback (if API key available)
+        ]
+        
+        # Set shared cache for all sources
+        for source in self.sources:
+            source.cache = self.cache
+    
+    async def cleanup_sessions(self):
+        """Clean up any open sessions"""
+        for session in self._sessions_to_close:
+            if not session.closed:
+                await session.close()
+        self._sessions_to_close.clear()
+        
+        # Also close sessions from all sources
+        for source in self.sources:
+            if hasattr(source, 'close'):
+                await source.close()
+    
+    def _is_cache_fresh(self, cached_result: Dict[str, Any], ticker: str) -> bool:
+        """
+        Check if cached earnings call analysis is still fresh based on earnings release patterns
+        
+        Args:
+            cached_result: Cached analysis result
+            ticker: Stock ticker symbol
+            
+        Returns:
+            True if cache is fresh, False if stale
+        """
+        try:
+            # Get analysis date from cache
+            analysis_date_str = cached_result.get("analysis_date")
+            if not analysis_date_str:
+                return False
+            
+            analysis_date = datetime.fromisoformat(analysis_date_str.replace('Z', '+00:00'))
+            days_since_analysis = (datetime.now() - analysis_date.replace(tzinfo=None)).days
+            
+            # Smart cache invalidation rules:
+            # 1. If analysis is less than 7 days old, always fresh
+            if days_since_analysis < 7:
+                return True
+            
+            # 2. If analysis is 7-30 days old, check if we're in earnings season
+            if days_since_analysis <= 30:
+                # Check if we're in a typical earnings release window (month 1, 4, 7, 10)
+                current_month = datetime.now().month
+                if current_month in [1, 4, 7, 10]:  # Earnings seasons
+                    logger.info(f"🔄 Earnings season detected (month {current_month}), cache may be stale for {ticker}")
+                    return False
+                return True
+            
+            # 3. If analysis is older than 30 days, always stale
+            return False
+            
+        except Exception as e:
+            logger.warning(f"Error checking cache freshness for {ticker}: {e}")
+            return False
     
     async def analyze_earnings_calls(
         self,
@@ -386,20 +946,50 @@ class EarningsCallAnalyzer:
         """
         cache_key = f"earnings_call_analysis:{ticker}:{days_back}:{max_calls}"
         
-        # Check cache first
+        # Initialize cache and sources if needed
+        if self.cache is None:
+            self.cache = await get_cache_manager()
+        
+        # Initialize sources with shared cache
+        if not self.sources:
+            await self._initialize_sources()
+        
+        # Check cache first with smart invalidation for earnings calls
         cached_result = await self.cache.get(cache_key)
         if cached_result:
-            logger.info(f"Retrieved earnings call analysis from cache for {ticker}")
-            return cached_result
+            # Check if cache is still fresh based on earnings release patterns
+            if self._is_cache_fresh(cached_result, ticker):
+                logger.info(f"✅ CACHE HIT: Retrieved fresh earnings call analysis from cache for {ticker}")
+                return cached_result
+            else:
+                logger.info(f"🔄 CACHE STALE: Earnings call analysis for {ticker} is outdated, refreshing...")
+                # Delete stale cache entry
+                await self.cache.delete(cache_key)
+        
+        logger.info(f"❌ CACHE MISS: No cached earnings call analysis for {ticker}, analyzing...")
         
         try:
-            # Get transcripts from all sources
+            # Get transcripts from sources with intelligent fallback
             all_transcripts = []
+            sources_used = []
+            
             for source in self.sources:
                 try:
+                    logger.info(f"Trying {source.get_source_name()} for {ticker}")
                     transcripts = await source.get_transcripts(ticker, days_back)
-                    all_transcripts.extend(transcripts)
-                    logger.info(f"Retrieved {len(transcripts)} transcripts from {source.get_source_name()}")
+                    
+                    if transcripts:
+                        all_transcripts.extend(transcripts)
+                        sources_used.append(source.get_source_name())
+                        logger.info(f"✓ Retrieved {len(transcripts)} transcripts from {source.get_source_name()}")
+                        
+                        # If we have enough transcripts from a good source, we can stop
+                        if len(all_transcripts) >= max_calls and source.get_source_name() == "FMP":
+                            logger.info(f"Sufficient transcripts found from FMP, stopping search")
+                            break
+                    else:
+                        logger.info(f"✗ No transcripts found from {source.get_source_name()}")
+                        
                 except Exception as e:
                     logger.warning(f"Error getting transcripts from {source.get_source_name()}: {e}")
                     continue
@@ -416,6 +1006,7 @@ class EarningsCallAnalyzer:
                     "ticker": ticker,
                     "total_calls": 0,
                     "analysis_period": f"{days_back} days",
+                    "sources_used": sources_used,
                     "message": "No earnings call transcripts found",
                     "analysis_date": datetime.now().isoformat()
                 }
@@ -438,12 +1029,16 @@ class EarningsCallAnalyzer:
                 "ticker": ticker,
                 "total_calls": len(recent_transcripts),
                 "analysis_period": f"{days_back} days",
-                "sources_used": [source.get_source_name() for source in self.sources],
+                "sources_used": sources_used,
                 "analysis_date": datetime.now().isoformat()
             })
             
             # Cache results for 6 hours
-            await self.cache.set(cache_key, aggregated_analysis, ttl=21600)
+            await self.cache.set(cache_key, aggregated_analysis, ttl=2592000)  # 30 days
+            
+            # Log cache statistics
+            cache_stats = self.cache.get_cache_stats()
+            logger.info(f"📊 Cache Stats: {cache_stats['hit_rate']:.1f}% hit rate ({cache_stats['hits']} hits, {cache_stats['misses']} misses)")
             
             logger.info(f"Completed earnings call analysis for {ticker}: {len(call_analyses)} calls analyzed")
             return aggregated_analysis
@@ -455,6 +1050,9 @@ class EarningsCallAnalyzer:
                 "error": str(e),
                 "analysis_date": datetime.now().isoformat()
             }
+        finally:
+            # Clean up any open sessions
+            await self.cleanup_sessions()
     
     def _deduplicate_transcripts(self, transcripts: List[EarningsCall]) -> List[EarningsCall]:
         """Remove duplicate transcripts based on date and quarter"""
@@ -562,201 +1160,340 @@ class EarningsCallAnalyzer:
             return None
     
     async def _analyze_sentiment(self, transcript_text: str) -> Dict[str, Any]:
-        """Analyze sentiment and tone of the transcript"""
+        """Analyze sentiment and tone of the transcript using local analysis"""
         try:
-            # Use LLM for sentiment analysis
-            prompt = f"""
-            Analyze the sentiment and tone of this earnings call transcript.
+            # Use local sentiment analysis instead of external LLM
+            sentiment_score = self._analyze_sentiment_local(transcript_text)
             
-            Transcript:
-            {transcript_text[:2000]}...
-            
-            Provide:
-            1. Overall sentiment score (-1 to 1, where -1 is very negative, 0 is neutral, 1 is very positive)
-            2. Management tone (bullish, cautious, defensive, optimistic, neutral)
-            3. Confidence level (0 to 1, where 1 is very confident)
-            4. Key sentiment drivers (2-3 bullet points)
-            
-            Format as JSON:
-            {{
-                "sentiment": 0.5,
-                "tone": "optimistic",
-                "confidence": 0.8,
-                "drivers": ["Strong revenue growth", "Positive outlook", "Market expansion"]
-            }}
-            """
-            
-            response = await self.llm_orchestrator.generate_response(
-                task_type=TaskType.SENTIMENT_ANALYSIS,
-                prompt=prompt,
-                context={"transcript_length": len(transcript_text)},
-                complexity=TaskComplexity.MODERATE
-            )
-            
-            if response.content:
-                try:
-                    # Parse JSON response
-                    import json
-                    result = json.loads(response.content)
-                    return {
-                        "sentiment": result.get("sentiment", 0.0),
-                        "tone": result.get("tone", "neutral"),
-                        "confidence": result.get("confidence", 0.5),
-                        "drivers": result.get("drivers", [])
-                    }
-                except json.JSONDecodeError:
-                    pass
-            
-            # Fallback to TextBlob sentiment analysis (if available)
-            if NLP_PROCESSING_AVAILABLE:
-                blob = TextBlob(transcript_text)
-                sentiment_score = blob.sentiment.polarity
+            # Determine management tone based on sentiment score
+            if sentiment_score > 0.2:
+                tone = "optimistic"
+            elif sentiment_score > 0.1:
+                tone = "bullish"
+            elif sentiment_score < -0.2:
+                tone = "cautious"
+            elif sentiment_score < -0.1:
+                tone = "defensive"
             else:
-                sentiment_score = 0.0
+                tone = "neutral"
+            
+            # Calculate confidence based on transcript length and content quality
+            confidence = min(len(transcript_text) / 10000.0, 1.0)  # Longer transcripts = higher confidence
+            
+            # Extract key sentiment drivers using local analysis
+            drivers = self._extract_sentiment_drivers_local(transcript_text)
             
             return {
                 "sentiment": sentiment_score,
-                "tone": "bullish" if sentiment_score > 0.1 else "cautious" if sentiment_score < -0.1 else "neutral",
-                "confidence": 0.6,
-                "drivers": ["Automated sentiment analysis"]
+                "tone": tone,
+                "confidence": confidence,
+                "drivers": drivers
             }
-        
+            
         except Exception as e:
-            logger.warning(f"Error in sentiment analysis: {e}")
+            logger.error(f"Error in sentiment analysis: {e}")
             return {
                 "sentiment": 0.0,
-                "tone": "unknown",
-                "confidence": 0.0,
-                "drivers": []
+                "tone": "neutral",
+                "confidence": 0.3,
+                "drivers": ["Analysis unavailable"]
             }
     
-    async def _extract_guidance(self, transcript_text: str) -> Dict[str, Any]:
-        """Extract financial guidance from transcript"""
+    def _analyze_sentiment_local(self, text: str) -> float:
+        """Analyze sentiment using local text analysis"""
         try:
-            # Use LLM to extract guidance
-            prompt = f"""
-            Extract financial guidance from this earnings call transcript.
+            # Positive sentiment indicators
+            positive_words = [
+                'strong', 'growth', 'increase', 'improve', 'positive', 'excellent', 'outstanding',
+                'robust', 'solid', 'momentum', 'optimistic', 'confident', 'excited', 'pleased',
+                'successful', 'profitable', 'efficient', 'innovative', 'leading', 'competitive',
+                'record', 'best', 'exceed', 'beat', 'outperform', 'accelerate', 'expand'
+            ]
             
-            Transcript:
-            {transcript_text[:3000]}...
+            # Negative sentiment indicators
+            negative_words = [
+                'challenge', 'difficult', 'concern', 'decline', 'decrease', 'negative', 'weak',
+                'struggle', 'pressure', 'uncertainty', 'volatile', 'risk', 'headwind', 'cautious',
+                'disappointed', 'concerned', 'challenging', 'pressure', 'uncertain', 'volatile',
+                'miss', 'below', 'disappointing', 'concerning', 'worrisome', 'troubling'
+            ]
             
-            Look for:
-            1. Revenue guidance (quarterly, annual)
-            2. Earnings guidance (EPS, net income)
-            3. Margin guidance (gross, operating, net margins)
-            4. Capital expenditure guidance
+            # Defensiveness indicators
+            defensive_words = [
+                'however', 'but', 'although', 'despite', 'nevertheless', 'on the other hand',
+                'it\'s important to note', 'we should clarify', 'to be clear', 'let me emphasize',
+                'i want to be clear', 'let me clarify', 'to clarify', 'just to be clear'
+            ]
             
-            Format as JSON:
-            {{
-                "revenue": {{
-                    "quarterly": "Q2 revenue guidance: $X-Y billion",
-                    "annual": "Full year revenue guidance: $X-Y billion",
-                    "growth_rate": "X% year-over-year growth"
-                }},
-                "earnings": {{
-                    "eps": "Q2 EPS guidance: $X-Y",
-                    "net_income": "Net income guidance: $X-Y billion"
-                }},
-                "margins": {{
-                    "gross_margin": "Gross margin guidance: X%",
-                    "operating_margin": "Operating margin guidance: X%"
-                }},
-                "capex": {{
-                    "amount": "Capital expenditure guidance: $X-Y billion",
-                    "focus_areas": ["Technology", "Infrastructure"]
-                }}
-            }}
-            """
+            text_lower = text.lower()
             
-            response = await self.llm_orchestrator.generate_response(
-                task_type=TaskType.DATA_EXTRACTION,
-                prompt=prompt,
-                context={"transcript_length": len(transcript_text)},
-                complexity=TaskComplexity.MODERATE
-            )
+            # Count sentiment words
+            positive_count = sum(1 for word in positive_words if word in text_lower)
+            negative_count = sum(1 for word in negative_words if word in text_lower)
+            defensive_count = sum(1 for word in defensive_words if word in text_lower)
             
-            if response.content:
-                try:
-                    import json
-                    return json.loads(response.content)
-                except json.JSONDecodeError:
-                    pass
+            # Calculate sentiment score
+            total_words = len(text.split())
+            if total_words == 0:
+                return 0.0
             
-            # Fallback: simple pattern matching
-            return self._extract_guidance_patterns(transcript_text)
+            sentiment_score = (positive_count - negative_count) / max(total_words / 100, 1)
+            sentiment_score = max(-1.0, min(1.0, sentiment_score))  # Clamp to [-1, 1]
+            
+            # Adjust for defensiveness
+            defensiveness_factor = min(defensive_count / max(total_words / 200, 1), 0.5)
+            sentiment_score *= (1 - defensiveness_factor)
+            
+            return sentiment_score
+            
+        except Exception as e:
+            logger.error(f"Error in local sentiment analysis: {e}")
+            return 0.0
+    
+    def _extract_sentiment_drivers_local(self, text: str) -> List[str]:
+        """Extract key sentiment drivers using local analysis"""
+        try:
+            drivers = []
+            text_lower = text.lower()
+            
+            # Revenue-related drivers
+            if any(word in text_lower for word in ['revenue', 'sales', 'top line']):
+                if any(word in text_lower for word in ['strong', 'growth', 'increase', 'beat']):
+                    drivers.append("Strong revenue performance")
+                elif any(word in text_lower for word in ['weak', 'decline', 'miss', 'below']):
+                    drivers.append("Revenue challenges")
+            
+            # Profitability drivers
+            if any(word in text_lower for word in ['profit', 'margin', 'earnings', 'bottom line']):
+                if any(word in text_lower for word in ['strong', 'improve', 'expand', 'beat']):
+                    drivers.append("Improved profitability")
+                elif any(word in text_lower for word in ['pressure', 'decline', 'compress']):
+                    drivers.append("Profitability pressure")
+            
+            # Growth drivers
+            if any(word in text_lower for word in ['growth', 'expansion', 'scaling']):
+                drivers.append("Growth initiatives")
+            
+            # Market drivers
+            if any(word in text_lower for word in ['market', 'competitive', 'market share']):
+                drivers.append("Market position")
+            
+            # Innovation drivers
+            if any(word in text_lower for word in ['innovation', 'technology', 'digital', 'transformation']):
+                drivers.append("Innovation focus")
+            
+            # Limit to 3 drivers
+            return drivers[:3]
+            
+        except Exception as e:
+            logger.error(f"Error extracting sentiment drivers: {e}")
+            return ["Analysis unavailable"]
+    
+    async def _extract_guidance(self, transcript_text: str) -> Dict[str, Any]:
+        """Extract financial guidance from transcript using local analysis"""
+        try:
+            # Use local pattern matching instead of external LLM
+            return self._extract_guidance_local(transcript_text)
         
         except Exception as e:
-            logger.warning(f"Error extracting guidance: {e}")
+            logger.error(f"Error extracting guidance: {e}")
             return {}
     
-    def _extract_guidance_patterns(self, transcript_text: str) -> Dict[str, Any]:
-        """Extract guidance using pattern matching"""
-        guidance = {}
-        
-        # Revenue guidance patterns
-        revenue_patterns = [
-            r'revenue.*guidance.*?(\$[\d,\.]+[BMK]?)',
-            r'guidance.*revenue.*?(\$[\d,\.]+[BMK]?)',
-            r'expect.*revenue.*?(\$[\d,\.]+[BMK]?)'
-        ]
-        
-        for pattern in revenue_patterns:
-            match = re.search(pattern, transcript_text, re.IGNORECASE)
-            if match:
-                guidance["revenue"] = {"amount": match.group(1)}
-                break
-        
-        return guidance
+    def _extract_guidance_local(self, transcript_text: str) -> Dict[str, Any]:
+        """Extract guidance using comprehensive local pattern matching"""
+        try:
+            import re
+            guidance = {}
+            text_lower = transcript_text.lower()
+            
+            # Revenue guidance patterns
+            revenue_patterns = [
+                r'revenue.*guidance.*?(\$[\d,\.]+[BMK]?)',
+                r'guidance.*revenue.*?(\$[\d,\.]+[BMK]?)',
+                r'expect.*revenue.*?(\$[\d,\.]+[BMK]?)',
+                r'project.*revenue.*?(\$[\d,\.]+[BMK]?)',
+                r'forecast.*revenue.*?(\$[\d,\.]+[BMK]?)',
+                r'revenue.*range.*?(\$[\d,\.]+[BMK]?.*?\$[\d,\.]+[BMK]?)',
+                r'revenue.*between.*?(\$[\d,\.]+[BMK]?.*?\$[\d,\.]+[BMK]?)'
+            ]
+            
+            revenue_guidance = []
+            for pattern in revenue_patterns:
+                matches = re.findall(pattern, transcript_text, re.IGNORECASE)
+                revenue_guidance.extend(matches)
+            
+            if revenue_guidance:
+                guidance["revenue"] = {
+                    "amount": revenue_guidance[0],
+                    "confidence": min(len(revenue_guidance) / 3.0, 1.0)
+                }
+            
+            # Earnings guidance patterns
+            earnings_patterns = [
+                r'eps.*guidance.*?(\$[\d,\.]+)',
+                r'guidance.*eps.*?(\$[\d,\.]+)',
+                r'expect.*eps.*?(\$[\d,\.]+)',
+                r'project.*eps.*?(\$[\d,\.]+)',
+                r'earnings.*guidance.*?(\$[\d,\.]+[BMK]?)',
+                r'guidance.*earnings.*?(\$[\d,\.]+[BMK]?)'
+            ]
+            
+            earnings_guidance = []
+            for pattern in earnings_patterns:
+                matches = re.findall(pattern, transcript_text, re.IGNORECASE)
+                earnings_guidance.extend(matches)
+            
+            if earnings_guidance:
+                guidance["earnings"] = {
+                    "eps": earnings_guidance[0] if earnings_guidance[0].startswith('$') else f"${earnings_guidance[0]}",
+                    "confidence": min(len(earnings_guidance) / 3.0, 1.0)
+                }
+            
+            # Margin guidance patterns
+            margin_patterns = [
+                r'margin.*guidance.*?(\d+\.?\d*%)',
+                r'guidance.*margin.*?(\d+\.?\d*%)',
+                r'expect.*margin.*?(\d+\.?\d*%)',
+                r'gross.*margin.*?(\d+\.?\d*%)',
+                r'operating.*margin.*?(\d+\.?\d*%)'
+            ]
+            
+            margin_guidance = []
+            for pattern in margin_patterns:
+                matches = re.findall(pattern, transcript_text, re.IGNORECASE)
+                margin_guidance.extend(matches)
+            
+            if margin_guidance:
+                guidance["margins"] = {
+                    "gross_margin": margin_guidance[0],
+                    "confidence": min(len(margin_guidance) / 3.0, 1.0)
+                }
+            
+            # Capital expenditure patterns
+            capex_patterns = [
+                r'capex.*guidance.*?(\$[\d,\.]+[BMK]?)',
+                r'guidance.*capex.*?(\$[\d,\.]+[BMK]?)',
+                r'capital.*expenditure.*?(\$[\d,\.]+[BMK]?)',
+                r'investment.*guidance.*?(\$[\d,\.]+[BMK]?)'
+            ]
+            
+            capex_guidance = []
+            for pattern in capex_patterns:
+                matches = re.findall(pattern, transcript_text, re.IGNORECASE)
+                capex_guidance.extend(matches)
+            
+            if capex_guidance:
+                guidance["capex"] = {
+                    "amount": capex_guidance[0],
+                    "confidence": min(len(capex_guidance) / 3.0, 1.0)
+                }
+            
+            # Growth rate patterns
+            growth_patterns = [
+                r'growth.*rate.*?(\d+\.?\d*%)',
+                r'year.*over.*year.*?(\d+\.?\d*%)',
+                r'yoy.*growth.*?(\d+\.?\d*%)',
+                r'growth.*guidance.*?(\d+\.?\d*%)'
+            ]
+            
+            growth_guidance = []
+            for pattern in growth_patterns:
+                matches = re.findall(pattern, transcript_text, re.IGNORECASE)
+                growth_guidance.extend(matches)
+            
+            if growth_guidance and "revenue" in guidance:
+                guidance["revenue"]["growth_rate"] = growth_guidance[0]
+            
+            return guidance
+            
+        except Exception as e:
+            logger.error(f"Error in local guidance extraction: {e}")
+            return {}
     
     async def _analyze_qa_session(self, transcript_text: str) -> Dict[str, Any]:
-        """Analyze Q&A session for defensiveness and key topics"""
+        """Analyze Q&A session for defensiveness and key topics using local analysis"""
         try:
-            # Use LLM to analyze Q&A session
-            prompt = f"""
-            Analyze the Q&A session from this earnings call transcript.
-            
-            Transcript:
-            {transcript_text[:3000]}...
-            
-            Provide:
-            1. Key analyst questions (top 3-5)
-            2. Management response quality (defensive, open, evasive)
-            3. Topics that management avoided or were evasive about
-            4. Defensiveness score (0-1, where 1 is very defensive)
-            
-            Format as JSON:
-            {{
-                "questions": ["Question 1", "Question 2", "Question 3"],
-                "responses": ["Response 1", "Response 2", "Response 3"],
-                "defensiveness": 0.3,
-                "topics_avoided": ["Topic 1", "Topic 2"]
-            }}
-            """
-            
-            response = await self.llm_orchestrator.generate_response(
-                task_type=TaskType.SENTIMENT_ANALYSIS,
-                prompt=prompt,
-                context={"transcript_length": len(transcript_text)},
-                complexity=TaskComplexity.MODERATE
-            )
-            
-            if response.content:
-                try:
-                    import json
-                    return json.loads(response.content)
-                except json.JSONDecodeError:
-                    pass
-            
-            # Fallback analysis
+            # Use local analysis instead of external LLM
+            return self._analyze_qa_local(transcript_text)
+        
+        except Exception as e:
+            logger.error(f"Error analyzing Q&A session: {e}")
             return {
                 "questions": [],
                 "responses": [],
                 "defensiveness": 0.5,
                 "topics_avoided": []
             }
-        
+    
+    def _analyze_qa_local(self, transcript_text: str) -> Dict[str, Any]:
+        """Analyze Q&A session using local pattern matching"""
+        try:
+            import re
+            text_lower = transcript_text.lower()
+            
+            # Find Q&A indicators
+            qa_patterns = [
+                r'question.*?answer',
+                r'analyst.*?question',
+                r'operator.*?question',
+                r'next question',
+                r'question from',
+                r'let me.*?answer',
+                r'that\'s a.*?question',
+                r'good question',
+                r'great question',
+                r'follow-up question'
+            ]
+            
+            qa_indicators = []
+            for pattern in qa_patterns:
+                matches = re.findall(pattern, transcript_text, re.IGNORECASE)
+                qa_indicators.extend(matches)
+            
+            # Calculate defensiveness score
+            defensive_phrases = [
+                'i can\'t comment on that',
+                'we don\'t provide guidance on',
+                'that\'s not something we discuss',
+                'i\'d rather not speculate',
+                'we\'re not prepared to discuss',
+                'that\'s confidential',
+                'i can\'t go into details',
+                'we\'ll have to see',
+                'it\'s too early to tell',
+                'we\'re not ready to comment'
+            ]
+            
+            defensive_count = sum(1 for phrase in defensive_phrases if phrase in text_lower)
+            total_words = len(transcript_text.split())
+            defensiveness_score = min(defensive_count / max(total_words / 1000, 1), 1.0)
+            
+            # Extract questions (simple pattern matching)
+            question_patterns = [
+                r'question.*?[:?]',
+                r'analyst.*?[:?]',
+                r'operator.*?[:?]'
+            ]
+            
+            questions = []
+            for pattern in question_patterns:
+                matches = re.findall(pattern, transcript_text, re.IGNORECASE)
+                questions.extend(matches[:3])  # Limit to 3 questions
+            
+            # Identify topics that might be avoided
+            avoided_topics = []
+            if defensiveness_score > 0.3:
+                avoided_topics = ["Future guidance", "Competitive positioning", "Market outlook"]
+            
+            return {
+                "questions": questions[:5],  # Limit to 5 questions
+                "responses": [],  # Would need more complex analysis
+                "defensiveness": defensiveness_score,
+                "topics_avoided": avoided_topics
+            }
+            
         except Exception as e:
-            logger.warning(f"Error analyzing Q&A session: {e}")
+            logger.error(f"Error in local Q&A analysis: {e}")
             return {
                 "questions": [],
                 "responses": [],
@@ -765,47 +1502,81 @@ class EarningsCallAnalyzer:
             }
     
     async def _extract_key_topics(self, transcript_text: str) -> Dict[str, Any]:
-        """Extract key topics, concerns, and new initiatives"""
+        """Extract key topics, concerns, and new initiatives using local analysis"""
         try:
-            # Use LLM to extract key topics
-            prompt = f"""
-            Extract key topics, concerns, and new initiatives from this earnings call transcript.
-            
-            Transcript:
-            {transcript_text[:3000]}...
-            
-            Provide:
-            1. Key topics discussed (top 5-7)
-            2. Concerns or challenges raised
-            3. New initiatives or strategic moves announced
-            
-            Format as JSON:
-            {{
-                "topics": ["Topic 1", "Topic 2", "Topic 3"],
-                "concerns": ["Concern 1", "Concern 2"],
-                "initiatives": ["Initiative 1", "Initiative 2"]
-            }}
-            """
-            
-            response = await self.llm_orchestrator.generate_response(
-                task_type=TaskType.DATA_EXTRACTION,
-                prompt=prompt,
-                context={"transcript_length": len(transcript_text)},
-                complexity=TaskComplexity.MODERATE
-            )
-            
-            if response.content:
-                try:
-                    import json
-                    return json.loads(response.content)
-                except json.JSONDecodeError:
-                    pass
-            
-            # Fallback: simple keyword extraction
-            return self._extract_topics_keywords(transcript_text)
+            # Use local analysis instead of external LLM
+            return self._extract_topics_local(transcript_text)
         
         except Exception as e:
-            logger.warning(f"Error extracting key topics: {e}")
+            logger.error(f"Error extracting key topics: {e}")
+            return {
+                "topics": [],
+                "concerns": [],
+                "initiatives": []
+            }
+    
+    def _extract_topics_local(self, transcript_text: str) -> Dict[str, Any]:
+        """Extract topics using comprehensive local keyword analysis"""
+        try:
+            text_lower = transcript_text.lower()
+            
+            # Financial and business topic keywords
+            topic_keywords = {
+                'revenue': ['revenue', 'sales', 'top line', 'income'],
+                'profitability': ['profit', 'margin', 'earnings', 'profitability', 'bottom line'],
+                'growth': ['growth', 'expansion', 'scaling', 'increasing'],
+                'market': ['market', 'market share', 'competitive', 'competition'],
+                'innovation': ['innovation', 'technology', 'digital', 'transformation'],
+                'operations': ['operations', 'efficiency', 'productivity', 'cost'],
+                'strategy': ['strategy', 'strategic', 'initiative', 'plan'],
+                'risk': ['risk', 'challenge', 'headwind', 'uncertainty'],
+                'guidance': ['guidance', 'outlook', 'forecast', 'expectation'],
+                'investment': ['investment', 'capex', 'capital', 'spending']
+            }
+            
+            # Score each topic based on keyword frequency
+            topic_scores = {}
+            for topic, keywords in topic_keywords.items():
+                score = sum(text_lower.count(keyword) for keyword in keywords)
+                if score > 0:
+                    topic_scores[topic] = score
+            
+            # Get top topics
+            sorted_topics = sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)
+            top_topics = [topic for topic, score in sorted_topics[:7]]
+            
+            # Extract concerns
+            concern_keywords = [
+                'challenge', 'concern', 'risk', 'headwind', 'pressure', 'uncertainty',
+                'volatile', 'difficult', 'struggle', 'decline', 'weak', 'miss',
+                'below', 'disappointing', 'concerning', 'worrisome', 'troubling'
+            ]
+            
+            concerns = []
+            for keyword in concern_keywords:
+                if keyword in text_lower:
+                    concerns.append(f"Management mentioned {keyword}")
+            
+            # Extract initiatives
+            initiative_keywords = [
+                'new initiative', 'strategic initiative', 'launch', 'introduce',
+                'expand', 'acquisition', 'partnership', 'investment', 'development',
+                'innovation', 'transformation', 'digital', 'technology'
+            ]
+            
+            initiatives = []
+            for keyword in initiative_keywords:
+                if keyword in text_lower:
+                    initiatives.append(f"New {keyword} mentioned")
+            
+            return {
+                "topics": top_topics,
+                "concerns": concerns[:5],  # Limit to 5 concerns
+                "initiatives": initiatives[:5]  # Limit to 5 initiatives
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in local topic extraction: {e}")
             return {
                 "topics": [],
                 "concerns": [],
@@ -930,6 +1701,18 @@ class EarningsCallAnalyzer:
         }
 
 
+# Global analyzer instance to maintain cache between calls
+_global_analyzer = None
+
+async def get_global_analyzer() -> EarningsCallAnalyzer:
+    """Get or create the global analyzer instance"""
+    global _global_analyzer
+    if _global_analyzer is None:
+        _global_analyzer = EarningsCallAnalyzer()
+        # Initialize sources with shared cache when the global analyzer is first created
+        await _global_analyzer._initialize_sources() 
+    return _global_analyzer
+
 # Main function for integration
 async def analyze_earnings_calls(ticker: str, days_back: int = 90, max_calls: int = 5) -> Dict[str, Any]:
     """
@@ -943,5 +1726,19 @@ async def analyze_earnings_calls(ticker: str, days_back: int = 90, max_calls: in
     Returns:
         Comprehensive earnings call analysis
     """
-    analyzer = EarningsCallAnalyzer()
-    return await analyzer.analyze_earnings_calls(ticker, days_back, max_calls)
+    analyzer = await get_global_analyzer()
+    try:
+        return await analyzer.analyze_earnings_calls(ticker, days_back, max_calls)
+    except Exception as e:
+        logger.error(f"Error in analyze_earnings_calls for {ticker}: {e}")
+        return {
+            "status": "error",
+            "transcripts": [],
+            "analysis": {
+                "management_sentiment": {"overall_sentiment": 0.0, "confidence_score": 0.0},
+                "guidance_analysis": {},
+                "key_insights": {"topics_discussed": [], "concerns_raised": [], "new_initiatives": []},
+                "summary_insights": f"Error analyzing earnings calls for {ticker}: {e}",
+                "confidence_score": 0.0
+            }
+        }

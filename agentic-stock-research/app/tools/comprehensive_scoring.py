@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+import pandas as pd
 
 from app.tools.fundamentals import compute_fundamentals
 from app.tools.dcf_valuation import perform_dcf_valuation
@@ -65,6 +66,7 @@ class ComprehensiveScore:
     # Trading recommendations
     position_sizing_pct: float       # Recommended portfolio allocation %
     entry_zone: Tuple[float, float]  # (min_price, max_price) for entry
+    entry_explanation: str          # Explanation of how entry zone was calculated
     target_price: float
     stop_loss: float
     time_horizon_months: int
@@ -161,6 +163,7 @@ class ComprehensiveScoringEngine:
                 macro_sensitivity=pillar_scores["macro_sensitivity"],
                 position_sizing_pct=trading_params["position_sizing"],
                 entry_zone=trading_params["entry_zone"],
+                entry_explanation=trading_params["entry_explanation"],
                 target_price=trading_params["target_price"],
                 stop_loss=trading_params["stop_loss"],
                 time_horizon_months=trading_params["time_horizon"],
@@ -813,69 +816,85 @@ class ComprehensiveScoringEngine:
             position_sizing = 1.0  # 1% of portfolio (minimal exposure)
         
         # Entry zone, target, and stop loss
-        # Use DCF-based targets if available
+        # Use technical analysis for entry zone, DCF for target/stop
         valuation_metrics = pillar_scores["valuation"].key_metrics
         intrinsic_value = valuation_metrics.get("intrinsic_value", 0)
         
-        # Try to get DCF values directly first
+        try:
+            # Get technical analysis data for proper entry zone calculation
+            from app.tools.finance import fetch_ohlcv
+            from app.graph.nodes.technicals import _calculate_support_resistance, _calculate_entry_zone
+            
+            # Fetch OHLCV data for technical analysis
+            df = await fetch_ohlcv(ticker)
+            if not df.empty and len(df) >= 20:
+                # Extract OHLC data
+                if isinstance(df.columns, pd.MultiIndex):
+                    def pick(col: str):
+                        cols = [c for c in df.columns if isinstance(c, tuple) and col in c]
+                        if cols:
+                            series = df[cols[0]]
+                            if isinstance(series, pd.DataFrame):
+                                series = series.iloc[:, 0]
+                            return series
+                        return None
+                    high_s = pick("High")
+                    low_s = pick("Low")
+                    close_s = pick("Close")
+                else:
+                    high_s = df["High"] if "High" in df.columns else None
+                    low_s = df["Low"] if "Low" in df.columns else None
+                    close_s = df["Close"] if "Close" in df.columns else None
+                
+                # Calculate support/resistance and entry zone
+                support_levels, resistance_levels = _calculate_support_resistance(high_s, low_s, close_s)
+                
+                # Calculate moving averages for regime detection
+                if close_s is not None:
+                    c = close_s.astype(float).ffill().bfill()
+                    sma20 = c.rolling(20).mean().iloc[-1] if len(c) >= 20 else None
+                    sma50 = c.rolling(50).mean().iloc[-1] if len(c) >= 50 else None
+                else:
+                    sma20 = sma50 = None
+                
+                # Calculate technical entry zone
+                tech_entry_zone = _calculate_entry_zone(current_price, support_levels, resistance_levels, sma20, sma50)
+                
+                entry_zone = (tech_entry_zone["entry_zone_low"], tech_entry_zone["entry_zone_high"])
+                entry_explanation = tech_entry_zone["explanation"]
+                
+                logger.info(f"Using technical analysis entry zone for {ticker}: {entry_zone} - {entry_explanation}")
+                
+            else:
+                # Fallback to DCF-based calculation if no technical data
+                logger.warning(f"Insufficient technical data for {ticker}, falling back to DCF-based entry zone")
+                entry_zone, entry_explanation = await self._fallback_entry_zone_calculation(ticker, current_price, intrinsic_value)
+                
+        except Exception as e:
+            logger.warning(f"Error in technical analysis for {ticker}: {e}, using fallback")
+            entry_zone, entry_explanation = await self._fallback_entry_zone_calculation(ticker, current_price, intrinsic_value)
+        
+        # Get DCF target price and stop loss (these are still useful)
         try:
             dcf_result = await perform_dcf_valuation(ticker, current_price)
             if "error" not in dcf_result:
-                # Use DCF-calculated trading rules
-                dcf_buy_zone = dcf_result.get("buy_zone", 0)
-                dcf_target_price = dcf_result.get("target_price", 0)
-                dcf_stop_loss = dcf_result.get("stop_loss", 0)
-                
-                if dcf_buy_zone and dcf_target_price and dcf_stop_loss:
-                    # Use DCF values if available
-                    entry_zone = (dcf_buy_zone * 0.95, dcf_buy_zone * 1.05)  # Small range around buy zone
-                    target_price = dcf_target_price
-                    stop_loss = dcf_stop_loss
-                    logger.info(f"Using DCF trading rules for {ticker}: buy_zone={dcf_buy_zone}, target={dcf_target_price}, stop={dcf_stop_loss}")
-                else:
-                    # Fallback to intrinsic value based calculations
-                    if intrinsic_value > 0:
-                        entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
-                        target_price = intrinsic_value * 1.2
-                        stop_loss = (current_price or intrinsic_value) * 0.85
-                    else:
-                        # Final fallback
-                        if current_price:
-                            entry_zone = (current_price * 0.9, current_price * 1.05)
-                            target_price = current_price * 1.25
-                            stop_loss = current_price * 0.85
-                        else:
-                            entry_zone = (0.0, 0.0)
-                            target_price = 0.0
-                            stop_loss = 0.0
+                target_price = dcf_result.get("target_price", 0)
+                stop_loss = dcf_result.get("stop_loss", 0)
+                logger.info(f"Using DCF target/stop for {ticker}: target={target_price}, stop={stop_loss}")
             else:
-                # DCF failed, use intrinsic value or price-based fallback
-                if intrinsic_value > 0:
-                    entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
-                    target_price = intrinsic_value * 1.2
-                    stop_loss = (current_price or intrinsic_value) * 0.85
-                elif current_price:
-                    entry_zone = (current_price * 0.9, current_price * 1.05)
+                # Fallback target and stop loss
+                if current_price:
                     target_price = current_price * 1.25
                     stop_loss = current_price * 0.85
                 else:
-                    entry_zone = (0.0, 0.0)
                     target_price = 0.0
                     stop_loss = 0.0
         except Exception as e:
-            logger.warning(f"Failed to get DCF trading rules for {ticker}: {e}")
-            # Fallback to basic calculations
+            logger.warning(f"DCF calculation failed for {ticker}: {e}")
             if current_price:
-                if intrinsic_value > 0:
-                    entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
-                    target_price = intrinsic_value * 1.2
-                    stop_loss = current_price * 0.85
-                else:
-                    entry_zone = (current_price * 0.9, current_price * 1.05)
-                    target_price = current_price * 1.25
-                    stop_loss = current_price * 0.85
+                target_price = current_price * 1.25
+                stop_loss = current_price * 0.85
             else:
-                entry_zone = (0.0, 0.0)
                 target_price = 0.0
                 stop_loss = 0.0
         
@@ -890,10 +909,44 @@ class ComprehensiveScoringEngine:
         return {
             "position_sizing": position_sizing,
             "entry_zone": entry_zone,
+            "entry_explanation": entry_explanation,
             "target_price": target_price,
             "stop_loss": stop_loss,
             "time_horizon": time_horizon
         }
+    
+    async def _fallback_entry_zone_calculation(self, ticker: str, current_price: Optional[float], intrinsic_value: float) -> tuple:
+        """Fallback entry zone calculation using DCF or price-based methods"""
+        try:
+            dcf_result = await perform_dcf_valuation(ticker, current_price)
+            if "error" not in dcf_result:
+                dcf_buy_zone = dcf_result.get("buy_zone", 0)
+                if dcf_buy_zone and dcf_buy_zone > 0:
+                    entry_zone = (dcf_buy_zone * 0.95, dcf_buy_zone * 1.05)
+                    explanation = f"Fallback: DCF-based entry zone around buy zone ₹{dcf_buy_zone:.2f}"
+                    return entry_zone, explanation
+            
+            # Fallback to intrinsic value
+            if intrinsic_value > 0:
+                entry_zone = (intrinsic_value * 0.8, intrinsic_value * 0.95)
+                explanation = f"Fallback: Intrinsic value-based entry zone ₹{entry_zone[0]:.2f}-₹{entry_zone[1]:.2f} (20% below to 5% below intrinsic value)"
+                return entry_zone, explanation
+            
+            # Final fallback
+            if current_price and current_price > 0:
+                entry_zone = (current_price * 0.9, current_price * 1.05)
+                explanation = f"Fallback: Conservative entry zone ₹{entry_zone[0]:.2f}-₹{entry_zone[1]:.2f} (10% below to 5% above current price)"
+                return entry_zone, explanation
+            else:
+                return (0.0, 0.0), "Insufficient data for entry zone calculation"
+                
+        except Exception as e:
+            logger.error(f"Fallback entry zone calculation failed for {ticker}: {e}")
+            if current_price and current_price > 0:
+                entry_zone = (current_price * 0.9, current_price * 1.05)
+                return entry_zone, f"Emergency fallback: ₹{entry_zone[0]:.2f}-₹{entry_zone[1]:.2f}"
+            else:
+                return (0.0, 0.0), "Emergency fallback: No price data available"
     
     def _assess_risk_factors(self, pillar_scores: Dict[str, PillarScore]) -> Dict[str, Any]:
         """Assess overall risk factors and catalysts"""

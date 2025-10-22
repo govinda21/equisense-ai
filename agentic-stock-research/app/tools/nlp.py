@@ -74,7 +74,7 @@ async def summarize_texts(texts: List[str], max_words: int = 120) -> str:
 
     def _summ() -> str:
         try:
-            summarizer = pipeline("summarization")
+            summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
             res = summarizer("\n".join(texts), max_length=180, min_length=60, do_sample=False)
             return res[0]["summary_text"]
         except Exception:
@@ -106,7 +106,7 @@ async def sentiment_score(texts: List[str]) -> float:
 
     def _sent() -> float:
         try:
-            clf = pipeline("sentiment-analysis")
+            clf = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
             results = clf(texts)
             scores = [r.get("score", 0.5) * (1 if r.get("label", "POSITIVE").upper().startswith("POS") else -1) for r in results]
             val = (sum(scores) / max(len(scores), 1) + 1.0) / 2.0
