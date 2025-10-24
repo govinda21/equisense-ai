@@ -526,7 +526,99 @@ User question: """
                 response = raw_response
             
             if not response:
-                response = "I'm having trouble processing your request right now. Please try again in a moment."
+                # Provide helpful fallback responses based on common questions
+                message_lower = req.message.lower()
+                
+                if ("grade" in message_lower or "rating" in message_lower) and ("b-" in message_lower or "b minus" in message_lower):
+                    response = """A grade of B- typically indicates:
+
+**Investment Grade Scale:**
+- **A+ to A-**: Excellent investment quality, strong fundamentals
+- **B+ to B-**: Good investment quality, moderate risk
+- **C+ to C-**: Fair investment quality, higher risk
+- **D+ to D-**: Poor investment quality, high risk
+- **F**: Very poor investment quality, very high risk
+
+**B- specifically means:**
+- Above average investment quality
+- Moderate risk profile
+- Generally suitable for conservative to moderate risk investors
+- May have some areas of concern but overall positive outlook
+
+For detailed analysis of specific stocks, I recommend using the Stock Analysis feature."""
+                
+                elif ("meaning" in message_lower or "what does" in message_lower) and ("hold" in message_lower or "buy" in message_lower or "sell" in message_lower):
+                    response = """**Investment Recommendation Meanings:**
+
+**BUY/STRONG BUY**: 
+- Positive outlook, expected price appreciation
+- Suitable for new positions or adding to existing holdings
+
+**HOLD**: 
+- Neutral outlook, maintain current position
+- Not recommended for new purchases or selling
+
+**SELL/STRONG SELL**: 
+- Negative outlook, expected price decline
+- Consider reducing or exiting position
+
+**WEAK HOLD**: 
+- Slightly negative outlook, consider reducing position
+- Between Hold and Sell recommendations
+
+These recommendations are based on fundamental analysis, technical indicators, and market conditions."""
+                
+                elif "pe ratio" in message_lower or "p/e" in message_lower or "price to earnings" in message_lower:
+                    response = """**P/E Ratio (Price-to-Earnings) Explanation:**
+
+**What it measures:** How much investors pay for each dollar of earnings
+
+**Interpretation:**
+- **Low P/E (5-15)**: Potentially undervalued, but may indicate problems
+- **Moderate P/E (15-25)**: Fairly valued for most companies
+- **High P/E (25+)**: Potentially overvalued, or high growth expectations
+
+**Important:** Compare P/E ratios within the same industry for meaningful analysis.
+
+**Trailing P/E**: Based on past 12 months earnings
+**Forward P/E**: Based on projected next 12 months earnings"""
+                
+                elif "help" in message_lower or "what can you do" in message_lower:
+                    response = """**I can help you with:**
+
+**Investment Analysis:**
+- Explain investment grades (A+, B-, C+, etc.)
+- Clarify recommendation meanings (Buy, Hold, Sell, Weak Hold)
+- Interpret financial ratios (P/E, P/B, ROE, Debt-to-Equity)
+- Explain technical indicators and market analysis
+
+**Stock Information:**
+- Current stock prices and market data
+- Company fundamentals and financial health
+- Sector analysis and market trends
+
+**How to get started:**
+1. Ask specific questions like "What does grade B- mean?"
+2. Use the Stock Analysis tab for detailed reports
+3. Ask about specific stocks: "What's the current price of AAPL?"
+
+**Note:** For full AI capabilities, install Ollama: https://ollama.ai/download"""
+                
+                else:
+                    response = """I'm currently unable to process your request because Ollama (the AI model) is not running. 
+
+**To fix this:**
+1. Install Ollama: https://ollama.ai/download
+2. Start Ollama service: `ollama serve`
+3. Pull the model: `ollama pull gemma3:4b`
+
+**Common Questions I can help with:**
+- Investment grade meanings (A+, B-, etc.)
+- Recommendation explanations (Buy, Hold, Sell)
+- Financial ratios (P/E, P/B, ROE)
+- Stock analysis interpretation
+
+For detailed stock analysis, use the Stock Analysis tab."""
             
             return {"response": response}
             

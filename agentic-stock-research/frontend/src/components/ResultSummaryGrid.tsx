@@ -34,6 +34,124 @@ function formatBuyZone(low?: number, high?: number, ticker?: string): string {
   return `${formatAmountByCurrency(low, ticker)} – ${formatAmountByCurrency(high, ticker)}`
 }
 
+function parseNewsSentiment(summary: string): React.ReactNode {
+  if (!summary) return null;
+
+  const lines = summary.split('\n').filter(line => line.trim());
+  const elements: React.ReactNode[] = [];
+  
+  let currentSection = '';
+  let currentItems: string[] = [];
+  
+  for (const line of lines) {
+    if (line.startsWith('**') && line.endsWith('**')) {
+      // Flush previous section
+      if (currentSection && currentItems.length > 0) {
+        elements.push(
+          <div key={currentSection} className="space-y-2">
+            <h4 className="font-semibold text-slate-800">{currentSection}</h4>
+            <ul className="space-y-1">
+              {currentItems.map((item, index) => (
+                <li key={index} className="text-sm text-slate-700 flex items-start">
+                  <span className="mr-2">•</span>
+                  <span className="flex-1">{parseNewsItem(item)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      }
+      
+      // Start new section
+      currentSection = line.replace(/\*\*/g, '');
+      currentItems = [];
+    } else if (line.startsWith('•')) {
+      currentItems.push(line.substring(1).trim());
+    } else if (line.trim()) {
+      // Handle overall sentiment or other content
+      if (currentSection === 'Overall Sentiment') {
+        elements.push(
+          <div key="overall-sentiment" className="bg-slate-50 rounded-lg p-3">
+            <div className="text-sm font-medium text-slate-800">{line}</div>
+          </div>
+        );
+      } else if (line.trim()) {
+        currentItems.push(line.trim());
+      }
+    }
+  }
+  
+  // Flush last section
+  if (currentSection && currentItems.length > 0) {
+    elements.push(
+      <div key={currentSection} className="space-y-2">
+        <h4 className="font-semibold text-slate-800">{currentSection}</h4>
+        <ul className="space-y-1">
+          {currentItems.map((item, index) => (
+            <li key={index} className="text-sm text-slate-700 flex items-start">
+              <span className="mr-2">•</span>
+              <span className="flex-1">{parseNewsItem(item)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  
+  return elements.length > 0 ? elements : (
+    <div className="bg-slate-50 rounded-lg p-3">
+      <div className="text-sm text-slate-700">{summary}</div>
+    </div>
+  );
+}
+
+function parseNewsItem(item: string): React.ReactNode {
+  // Parse news item with date and freshness indicators
+  const parts = item.split(' — ');
+  if (parts.length < 2) return item;
+  
+  const headline = parts[0];
+  const rest = parts.slice(1).join(' — ');
+  
+  // Extract date and sentiment info
+  const dateMatch = rest.match(/\(([^)]+)\)/);
+  const date = dateMatch ? dateMatch[1] : '';
+  const sentimentPart = rest.replace(/\([^)]+\)/, '').trim();
+  
+  // Check for freshness warnings
+  const hasOldYearWarning = item.includes('⚠️ (Old - 1+ year)');
+  const hasOldMonthsWarning = item.includes('⚠️ (Old - 6+ months)');
+  
+  return (
+    <div className="space-y-1">
+      <div className="font-medium">{headline}</div>
+      <div className="flex items-center gap-2 text-xs">
+        <span className={`px-2 py-1 rounded text-xs font-medium ${
+          sentimentPart.includes('Positive') ? 'bg-green-100 text-green-800' :
+          sentimentPart.includes('Negative') ? 'bg-red-100 text-red-800' :
+          'bg-gray-100 text-gray-800'
+        }`}>
+          {sentimentPart.split(';')[0]}
+        </span>
+        {date && (
+          <span className="text-slate-500">
+            📅 {date}
+          </span>
+        )}
+        {hasOldYearWarning && (
+          <span className="text-red-600 font-medium">⚠️ Old News (1+ year)</span>
+        )}
+        {hasOldMonthsWarning && (
+          <span className="text-orange-600 font-medium">⚠️ Old News (6+ months)</span>
+        )}
+      </div>
+      <div className="text-slate-600 text-xs">
+        {sentimentPart.split(';')[1]?.trim()}
+      </div>
+    </div>
+  );
+}
+
 export function ResultSummaryGrid({ report }: { report: any }) {
   const labels: string[] = report?.technicals?.details?.labels ?? []
   const closes: number[] = report?.technicals?.details?.closes ?? []
@@ -95,7 +213,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
             <div className="flex items-center space-x-2">
               <Icons.Star className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-500" />
               <span className="text-xs sm:text-sm text-slate-600">Professional Analysis</span>
-            </div>
+        </div>
           </div>
         </div>
         
@@ -112,14 +230,14 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                 </div>
                 <div className="text-base sm:text-lg tracking-wider text-yellow-500">
                   {(() => {
-                    const rating = report?.decision?.rating || 0;
-                    const fullStars = Math.floor(rating);
-                    const hasHalf = (rating - fullStars) >= 0.5;
-                    let stars = "★".repeat(fullStars);
-                    if (hasHalf && fullStars < 5) stars += "☆";
-                    stars += "☆".repeat(5 - stars.length);
-                    return stars;
-                  })()}
+              const rating = report?.decision?.rating || 0;
+              const fullStars = Math.floor(rating);
+              const hasHalf = (rating - fullStars) >= 0.5;
+              let stars = "★".repeat(fullStars);
+              if (hasHalf && fullStars < 5) stars += "☆";
+              stars += "☆".repeat(5 - stars.length);
+              return stars;
+            })()}
                 </div>
               </div>
             </div>
@@ -135,10 +253,10 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           {report?.decision?.executive_summary && (
             <div className="bg-white rounded-lg p-4 border border-blue-100">
               <div className="text-sm font-semibold text-slate-900 mb-2">Executive Summary</div>
-              <div className="text-sm text-slate-700 leading-relaxed">
+          <div className="text-sm text-slate-700 leading-relaxed">
                 {report.decision.executive_summary}
               </div>
-            </div>
+          </div>
           )}
         </div>
 
@@ -162,7 +280,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                 {formatAmountByCurrency(report.decision.price_target_12m, ticker)}
               </div>
               <div className="text-xs text-green-600">{report.decision.price_target_source}</div>
-            </div>
+      </div>
           )}
           
           {/* 3. Expected Return */}
@@ -454,8 +572,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                     </div>
                     <div className="text-xs text-slate-500">
                       {indicators.momentum20d > 0 ? 'Positive' : 'Negative'}
-                    </div>
-                  </div>
+            </div>
+          </div>
                   
                   <div className="bg-slate-50 rounded-lg p-3">
                     <div className="text-xs text-slate-500 mb-1">Current Price</div>
@@ -493,33 +611,31 @@ export function ResultSummaryGrid({ report }: { report: any }) {
             <h3 className="text-lg font-semibold">News Sentiment</h3>
             <Icons.Sentiment className="w-5 h-5 text-slate-500" />
           </div>
-          <div className="space-y-3">
+          <div className="space-y-4">
             {report?.news_sentiment?.summary && (
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="text-sm text-slate-700 leading-relaxed">
-                  {report.news_sentiment.summary}
-                </div>
-              </div>
+              <div className="space-y-3">
+                {parseNewsSentiment(report.news_sentiment.summary)}
+            </div>
             )}
             <div className="text-sm text-slate-600">
               Confidence: {(report?.news_sentiment?.confidence * 100)?.toFixed(0) || 0}%
             </div>
-          </div>
-        </div>
+            </div>
+            </div>
 
         {/* YouTube Sentiment */}
         <div className="card p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold">YouTube Analysis</h3>
             <Icons.MessageCircle className="w-5 h-5 text-slate-500" />
-          </div>
+                </div>
           <div className="space-y-3">
             {report?.youtube_sentiment?.summary && (
               <div className="bg-slate-50 rounded-lg p-3">
                 <div className="text-sm text-slate-700 leading-relaxed">
                   {report.youtube_sentiment.summary}
                 </div>
-              </div>
+                </div>
             )}
             <div className="text-sm text-slate-600">
               Confidence: {(report?.youtube_sentiment?.confidence * 100)?.toFixed(0) || 0}%
@@ -540,33 +656,33 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               </div>
               <div className="text-sm text-slate-600">
                 Filing analysis available
-              </div>
-            </div>
-          )}
+                </div>
+        </div>
+      )}
 
           {/* Earnings Call Analysis */}
           {earningsCall && (
-            <div className="card p-5">
+      <div className="card p-5">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-lg font-semibold">Earnings Call Analysis</h3>
                 <Icons.Microphone className="w-5 h-5 text-slate-500" />
-              </div>
+        </div>
               
               {earningsCall.status === 'success' ? (
                 <div className="space-y-4">
                   {/* Analysis Summary */}
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
+                <div>
                       <div className="text-xs text-slate-500 uppercase font-medium mb-1">Calls Analyzed</div>
                       <div className="text-lg font-semibold text-slate-900">{earningsCall.total_calls_analyzed || 0}</div>
-                    </div>
-                    <div>
+                </div>
+                <div>
                       <div className="text-xs text-slate-500 uppercase font-medium mb-1">Confidence</div>
                       <div className="text-lg font-semibold text-slate-900">
                         {earningsCall.confidence_score ? `${(earningsCall.confidence_score * 100).toFixed(0)}%` : '—'}
-                      </div>
-                    </div>
-                  </div>
+              </div>
+          </div>
+      </div>
 
                   {/* Management Sentiment */}
                   {earningsCall.management_sentiment && (
@@ -581,9 +697,9 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                           }`}>
                             {earningsCall.management_sentiment.overall_sentiment > 0.1 ? 'Positive' : 
                              earningsCall.management_sentiment.overall_sentiment < -0.1 ? 'Negative' : 'Neutral'}
-                          </div>
-                        </div>
-                        <div>
+        </div>
+            </div>
+            <div>
                           <div className="text-xs text-slate-500">Defensiveness</div>
                           <div className={`text-sm font-medium ${
                             earningsCall.management_sentiment.defensiveness_score > 0.3 ? 'text-red-600' : 
@@ -594,7 +710,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                           </div>
                         </div>
                       </div>
-                    </div>
+            </div>
                   )}
 
                   {/* Key Insights */}
@@ -603,14 +719,14 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                       <div className="text-sm font-medium text-slate-700 mb-2">Key Insights</div>
                       <div className="space-y-2">
                         {earningsCall.key_insights.topics_discussed && earningsCall.key_insights.topics_discussed.length > 0 && (
-                          <div>
+            <div>
                             <div className="text-xs text-slate-500">Topics Discussed</div>
                             <div className="text-sm text-slate-600">
                               {earningsCall.key_insights.topics_discussed.slice(0, 3).join(', ')}
                               {earningsCall.key_insights.topics_discussed.length > 3 && '...'}
-                            </div>
-                          </div>
-                        )}
+            </div>
+              </div>
+            )}
                         {earningsCall.key_insights.concerns_raised && earningsCall.key_insights.concerns_raised.length > 0 && (
                           <div>
                             <div className="text-xs text-slate-500">Concerns Raised</div>
@@ -618,76 +734,76 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                               {earningsCall.key_insights.concerns_raised.slice(0, 2).join(', ')}
                               {earningsCall.key_insights.concerns_raised.length > 2 && '...'}
                             </div>
-                          </div>
-                        )}
-                      </div>
+              </div>
+            )}
+          </div>
                     </div>
                   )}
 
                   {/* Summary Insights */}
                   {earningsCall.summary_insights && (
-                    <div>
+            <div>
                       <div className="text-sm font-medium text-slate-700 mb-2">Summary</div>
                       <div className="text-sm text-slate-600">
                         {earningsCall.summary_insights.length > 150 ? 
                           `${earningsCall.summary_insights.substring(0, 150)}...` : 
                           earningsCall.summary_insights}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
+            </div>
+              </div>
+            )}
+          </div>
+        ) : (
                 <div className="text-sm text-slate-500">
                   {earningsCall.summary_insights || (earningsCall.status === 'no_calls_found' ? 'No recent earnings calls found' : 'Analysis unavailable')}
                 </div>
-              )}
-            </div>
+        )}
+      </div>
           )}
 
           {/* Strategic Conviction */}
           {strategicConviction && (
-            <div className="card p-5">
+      <div className="card p-5">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-lg font-semibold">Strategic Conviction</h3>
                 <Icons.ChartBar className="w-5 h-5 text-slate-500" />
-              </div>
+        </div>
               
               {strategicConviction.details ? (
                 <div className="space-y-4">
                   {/* Overall Score */}
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
+            <div>
                       <div className="text-xs text-slate-500 uppercase font-medium mb-1">Conviction Score</div>
                       <div className="text-lg font-semibold text-slate-900">
                         {strategicConviction.details.overall_conviction_score ? `${strategicConviction.details.overall_conviction_score.toFixed(1)}/100` : '—'}
-                      </div>
-                    </div>
-                    <div>
+            </div>
+            </div>
+            <div>
                       <div className="text-xs text-slate-500 uppercase font-medium mb-1">Recommendation</div>
                       <div className="text-lg font-semibold text-slate-900">
                         {strategicConviction.details.strategic_recommendation || strategicConviction.summary || '—'}
-                      </div>
-                    </div>
-                  </div>
+            </div>
+          </div>
+      </div>
 
                   {/* Business Quality */}
                   {strategicConviction.details.business_quality && (
-                    <div>
+            <div>
                       <div className="text-sm font-medium text-slate-700 mb-2">Business Quality</div>
                       <div className="grid grid-cols-2 gap-3">
-                        <div>
+              <div>
                           <div className="text-xs text-slate-500">Score</div>
                           <div className="text-sm font-medium text-slate-900">
                             {strategicConviction.details.business_quality.score ? `${strategicConviction.details.business_quality.score.toFixed(1)}/100` : '—'}
-                          </div>
-                        </div>
-                        <div>
+              </div>
+              </div>
+              <div>
                           <div className="text-xs text-slate-500">Market Position</div>
                           <div className="text-sm font-medium text-slate-900">
                             {strategicConviction.details.business_quality.market_position?.description || '—'}
-                          </div>
-                        </div>
-                      </div>
+              </div>
+            </div>
+          </div>
                       
                       {/* Competitive Moats */}
                       {strategicConviction.details.business_quality.competitive_moats && strategicConviction.details.business_quality.competitive_moats.length > 0 && (
@@ -701,8 +817,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                             ))}
                           </div>
                         </div>
-                      )}
-                    </div>
+        )}
+      </div>
                   )}
 
                   {/* Growth Runway */}
@@ -714,34 +830,34 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                           <div className="text-xs text-slate-500">TAM Growth</div>
                           <div className="text-sm font-medium text-slate-900">
                             {strategicConviction.details.growth_runway.tam_analysis?.estimated_cagr ? `${strategicConviction.details.growth_runway.tam_analysis.estimated_cagr}% CAGR` : '—'}
-                          </div>
-                        </div>
-                        <div>
+        </div>
+            </div>
+            <div>
                           <div className="text-xs text-slate-500">Runway</div>
                           <div className="text-sm font-medium text-slate-900">
                             {strategicConviction.details.growth_runway.growth_runway_years || '—'}
                           </div>
                         </div>
-                      </div>
-                    </div>
+            </div>
+            </div>
                   )}
 
                   {/* Key Strengths */}
                   {strategicConviction.details.business_quality?.key_strengths && strategicConviction.details.business_quality.key_strengths.length > 0 && (
-                    <div>
+            <div>
                       <div className="text-xs text-slate-500 mb-1">Key Strengths</div>
                       <div className="space-y-1">
                         {strategicConviction.details.business_quality.key_strengths.slice(0, 3).map((strength: string, index: number) => (
                           <div key={index} className="text-sm text-green-700">• {strength}</div>
                         ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+            </div>
+          </div>
+        )}
+      </div>
               ) : (
                 <div className="text-sm text-slate-600">
                   Strategic analysis available
-                </div>
+        </div>
               )}
             </div>
           )}
@@ -752,7 +868,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-lg font-semibold">Sector Rotation Analysis</h3>
                 <Icons.TrendingUp className="w-5 h-5 text-slate-500" />
-              </div>
+            </div>
               
               {sectorRotation.details ? (
                 <div className="space-y-4">
@@ -794,8 +910,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                           </div>
                         </div>
                       </div>
-                    </div>
-                  )}
+                      </div>
+                    )}
 
                   {/* Rotation Signals */}
                   {sectorRotation.details.rotation_signals && (
@@ -805,7 +921,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                         {sectorRotation.details.rotation_signals.slice(0, 3).map((signal: any, index: number) => (
                           <div key={index} className="text-sm text-slate-700">
                             • {signal.signal_type}: {signal.description || 'Rotation signal detected'}
-                          </div>
+                  </div>
                         ))}
                       </div>
                     </div>
@@ -826,9 +942,9 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               ) : (
                 <div className="text-sm text-slate-600">
                   Sector rotation analysis available
-                </div>
-              )}
-            </div>
+                      </div>
+                    )}
+                  </div>
           )}
 
           {/* Insider Tracking */}
@@ -840,8 +956,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               </div>
               <div className="text-sm text-slate-600">
                 Insider tracking available
-              </div>
-            </div>
+          </div>
+          </div>
           )}
         </div>
       )}

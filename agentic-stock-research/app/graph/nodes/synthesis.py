@@ -297,7 +297,9 @@ def _generate_senior_analyst_recommendation(
     analysis: dict,
     positives: List[str],
     negatives: List[str],
-    expected_return: float
+    expected_return: float,
+    horizon_short_days: int = 30,
+    horizon_long_days: int = 365
 ) -> Dict[str, Any]:
     """
     Generate comprehensive senior equity analyst recommendation with all components.
@@ -374,11 +376,11 @@ def _generate_senior_analyst_recommendation(
     # 11. INDUSTRY CONTEXT
     industry_context = _build_industry_context(sector_macro, peer, analysis)
     
-    # 12. SHORT-TERM OUTLOOK (3-6 months)
-    short_term_outlook = _build_short_term_outlook(action, score, tech, news, analyst, fund, valuation)
+    # 12. SHORT-TERM OUTLOOK (user-specified horizon)
+    short_term_outlook = _build_short_term_outlook(action, score, tech, news, analyst, fund, valuation, horizon_short_days)
     
-    # 13. LONG-TERM OUTLOOK (12-36 months)
-    long_term_outlook = _build_long_term_outlook(action, score, growth, strategic_conviction, fund)
+    # 13. LONG-TERM OUTLOOK (user-specified horizon)
+    long_term_outlook = _build_long_term_outlook(action, score, growth, strategic_conviction, fund, horizon_long_days)
     
     # 14. PRICE TARGET
     # Get DCF data from comprehensive fundamentals
@@ -899,8 +901,82 @@ def _build_industry_context(sector_macro: dict, peer: dict, analysis: dict) -> s
     return "Industry context: " + "; ".join(parts) + "."
 
 
-def _build_short_term_outlook(action: str, score: float, tech: dict, news: dict, analyst: dict, fund: dict = None, valuation: dict = None) -> str:
-    """Build 3-6 month short-term outlook with actionable insights"""
+def _adjust_recommendation_for_horizon(action: str, score: float, horizon_short_days: int, horizon_long_days: int, tech: dict, fund: dict) -> str:
+    """
+    Adjust recommendation based on investment horizon and timeframe-specific factors
+    
+    Args:
+        action: Base recommendation
+        score: Confidence score
+        horizon_short_days: Short-term horizon in days
+        horizon_long_days: Long-term horizon in days
+        tech: Technical analysis data
+        fund: Fundamental analysis data
+        
+    Returns:
+        Adjusted recommendation with horizon-specific reasoning
+    """
+    # Extract technical indicators for horizon-specific analysis
+    indicators = tech.get("indicators", {})
+    signals = tech.get("signals", {})
+    
+    rsi = indicators.get("rsi14", 50)
+    momentum_20d = indicators.get("momentum20d", 0)
+    tech_score = signals.get("score", 0.5)
+    
+    # Extract fundamental metrics
+    pe_ratio = fund.get("pe_ratio") if fund else None
+    roe = fund.get("roe") if fund else None
+    
+    # Horizon-specific adjustments
+    adjustments = []
+    
+    # Very short-term (1-7 days): Focus on technical momentum
+    if horizon_short_days <= 7:
+        if momentum_20d > 0.05:  # Strong momentum
+            if action in ["Strong Buy", "Buy"]:
+                adjustments.append("Strong technical momentum supports very short-term position")
+            else:
+                adjustments.append("Consider momentum-based exit strategy")
+        elif momentum_20d < -0.05:  # Negative momentum
+            if action in ["Sell", "Strong Sell"]:
+                adjustments.append("Negative momentum confirms short-term bearish view")
+            else:
+                adjustments.append("Technical weakness suggests caution for very short-term holding")
+    
+    # Short-term (8-30 days): Balance technical and fundamental factors
+    elif horizon_short_days <= 30:
+        if rsi < 30 and action in ["Strong Buy", "Buy"]:
+            adjustments.append("Oversold conditions provide attractive short-term entry")
+        elif rsi > 70 and action in ["Hold", "Sell"]:
+            adjustments.append("Overbought conditions suggest short-term profit-taking opportunity")
+        
+        if pe_ratio and pe_ratio < 15 and action in ["Strong Buy", "Buy"]:
+            adjustments.append("Attractive valuation supports short-term accumulation")
+    
+    # Medium-term (31-90 days): Focus on earnings and sector trends
+    elif horizon_short_days <= 90:
+        if action in ["Strong Buy", "Buy"]:
+            adjustments.append("Medium-term horizon allows for earnings cycle participation")
+        elif action in ["Sell", "Strong Sell"]:
+            adjustments.append("Medium-term horizon may not capture full recovery potential")
+    
+    # Long-term (91+ days): Focus on fundamental strength
+    else:
+        if roe and roe > 0.15 and action in ["Strong Buy", "Buy"]:
+            adjustments.append("Strong fundamentals support long-term value creation")
+        elif roe and roe < 0.05 and action in ["Hold", "Sell"]:
+            adjustments.append("Weak fundamentals limit long-term upside potential")
+    
+    # Build adjusted recommendation
+    if adjustments:
+        return f"{action} - {adjustments[0]}"
+    else:
+        return action
+
+
+def _build_short_term_outlook(action: str, score: float, tech: dict, news: dict, analyst: dict, fund: dict = None, valuation: dict = None, horizon_days: int = 30) -> str:
+    """Build short-term outlook with actionable insights based on user-specified horizon"""
     
     # Extract specific data points for actionable insights
     indicators = tech.get("indicators", {})
@@ -1018,35 +1094,67 @@ def _build_short_term_outlook(action: str, score: float, tech: dict, news: dict,
                 actionable_recommendations.append("Negative news sentiment may continue to pressure the stock")
     
     # Build the outlook with specific recommendations and technical score
+    # Convert days to appropriate timeframe description
+    if horizon_days <= 7:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "very short-term"
+    elif horizon_days <= 30:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "short-term"
+    elif horizon_days <= 90:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "near-term"
+    else:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "medium-term"
+    
     if action in ["Strong Buy", "Buy"]:
-        outlook = f"Short-term outlook (3-6 months) is constructive with technical score of {tech_score:.2f}. "
+        outlook = f"Outlook for {timeframe_desc} ({timeframe_type}) is constructive with technical score of {tech_score:.2f}. "
         if insights:
             outlook += f"Key factors: {', '.join(insights[:3])}. "
         if actionable_recommendations:
             outlook += f"Action: {actionable_recommendations[0]}. "
-        outlook += "Monitor quarterly results and sector developments for confirmation."
+        
+        # Add horizon-specific risk/reward analysis
+        if horizon_days <= 7:
+            outlook += f"For {horizon_days}-day holding: Focus on technical momentum and news catalysts. "
+        elif horizon_days <= 30:
+            outlook += f"For {horizon_days}-day holding: Monitor earnings announcements and sector rotation. "
+        else:
+            outlook += f"For {horizon_days}-day holding: Consider quarterly results and macro developments. "
+        
+        outlook += "Risk management through stop-loss recommended."
     
     elif action == "Hold":
-        outlook = f"Short-term outlook (3-6 months) is neutral with technical score of {tech_score:.2f}. "
+        outlook = f"Outlook for {timeframe_desc} ({timeframe_type}) is neutral with technical score of {tech_score:.2f}. "
         if insights:
             outlook += f"Mixed signals: {', '.join(insights[:2])}. "
-        outlook += "Wait for clearer directional cues from earnings or sector rotation. "
+        outlook += f"For {horizon_days}-day holding: Wait for clearer directional cues. "
         if actionable_recommendations:
             outlook += f"Consider: {actionable_recommendations[0]}."
     
     else:  # Sell or Strong Sell
-        outlook = f"Short-term outlook (3-6 months) is challenging with technical score of {tech_score:.2f}. "
+        outlook = f"Outlook for {timeframe_desc} ({timeframe_type}) is challenging with technical score of {tech_score:.2f}. "
         if insights:
             outlook += f"Concerning factors: {', '.join(insights[:3])}. "
         if actionable_recommendations:
             outlook += f"Recommendation: {actionable_recommendations[0]}. "
+        
+        # Add horizon-specific risk analysis
+        if horizon_days <= 7:
+            outlook += f"For {horizon_days}-day holding: High volatility risk, consider reducing position size. "
+        elif horizon_days <= 30:
+            outlook += f"For {horizon_days}-day holding: Downside risk outweighs upside potential. "
+        else:
+            outlook += f"For {horizon_days}-day holding: Structural challenges may persist. "
+        
         outlook += "Risk management should be prioritized over potential upside."
     
     return outlook
 
 
-def _build_long_term_outlook(action: str, score: float, growth: dict, strategic_conviction: dict, fund: dict) -> str:
-    """Build 12-36 month long-term outlook using comprehensive fundamentals data"""
+def _build_long_term_outlook(action: str, score: float, growth: dict, strategic_conviction: dict, fund: dict, horizon_days: int = 365) -> str:
+    """Build long-term outlook using comprehensive fundamentals data based on user-specified horizon"""
     
     # Use comprehensive fundamentals data (the correct source)
     comp_fund = fund.get("comprehensive_fundamentals", {}) if fund else {}
@@ -1123,26 +1231,58 @@ def _build_long_term_outlook(action: str, score: float, growth: dict, strategic_
         actionable_points.append(f"Key risk: {primary_risk}")
     
     # Build the outlook with comprehensive analysis
+    # Convert days to appropriate timeframe description
+    if horizon_days <= 180:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "medium-term"
+    elif horizon_days <= 365:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "long-term"
+    elif horizon_days <= 730:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "extended-term"
+    else:
+        timeframe_desc = f"{horizon_days} days"
+        timeframe_type = "very long-term"
+    
     if action in ["Strong Buy", "Buy"]:
-        outlook = f"Long-term outlook (12-36 months) is constructive with overall score of {overall_score:.1f}. "
+        outlook = f"Outlook for {timeframe_desc} ({timeframe_type}) is constructive with overall score of {overall_score:.1f}. "
         if insights:
             outlook += f"Key strengths: {', '.join(insights[:3])}. "
         if actionable_points:
             outlook += f"Strategy: {actionable_points[0]}. "
+        
+        # Add horizon-specific analysis
+        if horizon_days <= 180:
+            outlook += f"For {horizon_days}-day holding: Focus on quarterly execution and sector trends. "
+        elif horizon_days <= 365:
+            outlook += f"For {horizon_days}-day holding: Monitor annual performance and competitive positioning. "
+        else:
+            outlook += f"For {horizon_days}-day holding: Evaluate strategic initiatives and market expansion. "
+        
         outlook += "Comprehensive analysis supports above-market returns potential."
     
     elif action == "Hold":
-        outlook = f"Long-term outlook (12-36 months) is balanced with overall score of {overall_score:.1f}. "
+        outlook = f"Outlook for {timeframe_desc} ({timeframe_type}) is balanced with overall score of {overall_score:.1f}. "
         if insights:
             outlook += f"Mixed factors: {', '.join(insights[:2])}. "
-        outlook += "Awaiting clearer growth catalysts or more attractive entry points. "
+        outlook += f"For {horizon_days}-day holding: Awaiting clearer growth catalysts or more attractive entry points. "
         if actionable_points:
             outlook += f"Monitor: {actionable_points[0]}."
     
     else:  # Sell or Strong Sell
-        outlook = f"Long-term outlook (12-36 months) faces challenges with overall score of {overall_score:.1f}. "
+        outlook = f"Outlook for {timeframe_desc} ({timeframe_type}) faces challenges with overall score of {overall_score:.1f}. "
         if insights:
             outlook += f"Concerning factors: {', '.join(insights[:3])}. "
+        
+        # Add horizon-specific risk analysis
+        if horizon_days <= 180:
+            outlook += f"For {horizon_days}-day holding: Near-term headwinds may persist. "
+        elif horizon_days <= 365:
+            outlook += f"For {horizon_days}-day holding: Structural challenges require monitoring. "
+        else:
+            outlook += f"For {horizon_days}-day holding: Long-term competitive pressures evident. "
+        
         outlook += "Comprehensive analysis suggests below-market returns potential. "
         if actionable_points:
             outlook += f"Risk: {actionable_points[0]}."
@@ -1180,7 +1320,7 @@ def _determine_price_target(analyst: dict, dcf: dict, current_price: Optional[fl
 
 
 def _calculate_expected_return(analyst: dict, fund: dict, current_price: Optional[float]) -> float:
-    """Calculate expected return prioritizing analyst consensus targets over intrinsic value"""
+    """Calculate expected return using multiple methods: analyst targets, PE expansion/contraction, and DCF"""
     
     logger.info(f"DEBUG: _calculate_expected_return called with analyst={bool(analyst)}, fund={bool(fund)}, current_price={current_price}")
     
@@ -1206,7 +1346,30 @@ def _calculate_expected_return(analyst: dict, fund: dict, current_price: Optiona
             logger.info(f"Using analyst midpoint expected return: {analyst_return:.1f}%")
             return round(analyst_return, 1)
     
-    # Priority 3: DCF target price-based expected return (not intrinsic value)
+    # Priority 3: PE-based expected return (Trailing PE vs Forward PE)
+    trailing_pe = fund.get("trailingPE")
+    forward_pe = fund.get("forwardPE")
+    
+    if trailing_pe and forward_pe and trailing_pe > 0 and forward_pe > 0:
+        # Calculate PE expansion/contraction
+        pe_change_pct = ((trailing_pe - forward_pe) / trailing_pe) * 100
+        
+        # If forward PE is lower than trailing PE, it suggests earnings growth or multiple compression
+        # This can indicate potential price appreciation if earnings are growing
+        if pe_change_pct > 0:  # Forward PE < Trailing PE (earnings growth expected)
+            # Conservative estimate: assume 50% of PE compression translates to price appreciation
+            pe_based_return = pe_change_pct * 0.5
+            if pe_based_return > -30 and pe_based_return < 50:  # Reasonable range
+                logger.info(f"Using PE-based expected return: {pe_based_return:.1f}% (Trailing PE: {trailing_pe:.1f}, Forward PE: {forward_pe:.1f})")
+                return round(pe_based_return, 1)
+        else:  # Forward PE > Trailing PE (multiple expansion or earnings decline)
+            # If forward PE is higher, it might indicate overvaluation or earnings decline
+            pe_based_return = pe_change_pct * 0.3  # More conservative for negative scenarios
+            if pe_based_return > -30 and pe_based_return < 50:  # Reasonable range
+                logger.info(f"Using PE-based expected return: {pe_based_return:.1f}% (Trailing PE: {trailing_pe:.1f}, Forward PE: {forward_pe:.1f})")
+                return round(pe_based_return, 1)
+    
+    # Priority 4: DCF target price-based expected return (not intrinsic value)
     dcf_valuation = fund.get("dcf_valuation", {})
     dcf_target_price = dcf_valuation.get("target_price")
     if dcf_target_price and dcf_target_price > 0 and current_price and current_price > 0:
@@ -1215,7 +1378,7 @@ def _calculate_expected_return(analyst: dict, fund: dict, current_price: Optiona
             logger.info(f"Using DCF target price expected return: {dcf_return:.1f}%")
             return round(dcf_return, 1)
     
-    # Priority 4: DCF intrinsic value with 20% premium
+    # Priority 5: DCF intrinsic value with 20% premium
     intrinsic_value = dcf_valuation.get("intrinsic_value")
     if intrinsic_value and intrinsic_value > 0 and current_price and current_price > 0:
         target_with_premium = intrinsic_value * 1.20
@@ -1224,13 +1387,13 @@ def _calculate_expected_return(analyst: dict, fund: dict, current_price: Optiona
             logger.info(f"Using DCF intrinsic value + 20% premium expected return: {intrinsic_return:.1f}%")
             return round(intrinsic_return, 1)
     
-    # Priority 5: Margin of safety (only if positive)
+    # Priority 6: Margin of safety (only if positive)
     margin_of_safety = dcf_valuation.get("margin_of_safety")
     if isinstance(margin_of_safety, (int, float)) and margin_of_safety > 0:
         logger.info(f"Using positive margin of safety expected return: {margin_of_safety * 100:.1f}%")
         return round(margin_of_safety * 100, 1)
     
-    # Priority 6: Upside potential from trading recommendations
+    # Priority 7: Upside potential from trading recommendations
     trading_rec = fund.get("trading_recommendations", {})
     upside_potential = trading_rec.get("upside_potential")
     if isinstance(upside_potential, (int, float)) and upside_potential > 0:
@@ -1706,7 +1869,9 @@ RETURN: [X.X]%"""
             logger.info("LLM parsing failed, generating fallback reasons based on score")
             
             # Get conviction level for threshold adjustment
-            conviction_level = strategic_conviction.get("conviction_level", "Medium Conviction") if strategic_conviction else "Medium Conviction"
+            conviction_level = "Medium Conviction"
+            if strategic_conviction and "details" in strategic_conviction:
+                conviction_level = strategic_conviction["details"].get("conviction_level", "Medium Conviction")
             logger.info(f"Using conviction level: {conviction_level} for action determination")
             
             # Use conviction-adjusted thresholds
@@ -1779,7 +1944,9 @@ RETURN: [X.X]%"""
         analysis=a,
         positives=positives,
         negatives=negatives,
-        expected_return=expected_return
+        expected_return=expected_return,
+        horizon_short_days=state.get("horizon_short_days", 30),
+        horizon_long_days=state.get("horizon_long_days", 365)
     )
     
     # Add decision to the first report with all senior analyst fields
@@ -1800,9 +1967,9 @@ RETURN: [X.X]%"""
                     "debug_test": "professional_fields_in_main_decision",
                     
                     # Strategic Conviction Integration
-                    "conviction_level": strategic_conviction.get("conviction_level", "Medium Conviction") if strategic_conviction else "Medium Conviction",
-                    "conviction_score": strategic_conviction.get("overall_conviction_score", 50.0) if strategic_conviction else 50.0,
-                    "strategic_recommendation": strategic_conviction.get("strategic_recommendation", "Hold") if strategic_conviction else "Hold",
+                    "conviction_level": strategic_conviction["details"].get("conviction_level", "Medium Conviction") if strategic_conviction and "details" in strategic_conviction else "Medium Conviction",
+                    "conviction_score": strategic_conviction["details"].get("overall_conviction_score", 50.0) if strategic_conviction and "details" in strategic_conviction else 50.0,
+                    "strategic_recommendation": strategic_conviction["details"].get("strategic_recommendation", "Hold") if strategic_conviction and "details" in strategic_conviction else "Hold",
                     
                     # Senior Equity Analyst Report Components
                     "executive_summary": senior_recommendation["executive_summary"],

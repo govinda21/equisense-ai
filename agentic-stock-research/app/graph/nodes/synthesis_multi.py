@@ -483,7 +483,7 @@ async def get_llm_insights(
 
 
 def calculate_expected_return(analysis: Dict[str, Any], score: float) -> float:
-    """Calculate expected return based on multiple factors"""
+    """Calculate expected return based on multiple factors including PE analysis"""
     
     # Base return from score
     base_return = (score - 0.5) * 40  # -20% to +20% base range
@@ -501,6 +501,24 @@ def calculate_expected_return(analysis: Dict[str, Any], score: float) -> float:
     if implied_return is not None:
         # Further blend with analyst expectations
         base_return = base_return * 0.7 + implied_return * 0.3
+    
+    # NEW: Add PE-based expected return analysis
+    fundamentals = analysis.get("fundamentals", {})
+    trailing_pe = fundamentals.get("trailingPE")
+    forward_pe = fundamentals.get("forwardPE")
+    
+    if trailing_pe and forward_pe and trailing_pe > 0 and forward_pe > 0:
+        # Calculate PE expansion/contraction
+        pe_change_pct = ((trailing_pe - forward_pe) / trailing_pe) * 100
+        
+        if pe_change_pct > 0:  # Forward PE < Trailing PE (earnings growth expected)
+            pe_based_return = pe_change_pct * 0.4  # Conservative estimate
+            # Blend with existing return
+            base_return = base_return * 0.8 + pe_based_return * 0.2
+        else:  # Forward PE > Trailing PE (multiple expansion or earnings decline)
+            pe_based_return = pe_change_pct * 0.2  # More conservative for negative scenarios
+            # Blend with existing return
+            base_return = base_return * 0.8 + pe_based_return * 0.2
     
     return round(base_return, 1)
 

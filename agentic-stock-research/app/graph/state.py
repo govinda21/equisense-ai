@@ -28,6 +28,8 @@ def _merge_ticker_analysis(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[
 class ResearchState(TypedDict, total=False):
     tickers: Annotated[List[str], _keep_unique_tickers]
     country: Annotated[str, _keep_last_country]  # Country for stock market context
+    horizon_short_days: Annotated[int, _keep_last_country]  # Short-term investment horizon in days
+    horizon_long_days: Annotated[int, _keep_last_country]   # Long-term investment horizon in days
     raw_data: Annotated[Dict[str, Any], operator.or_]  # {ticker: {ohlcv_summary, info}}
     analysis: Annotated[Dict[str, Any], _merge_ticker_analysis]  # {ticker: {news, tech, fund, etc}}
     confidences: Annotated[Dict[str, Any], operator.or_]  # {ticker: {node: confidence}}

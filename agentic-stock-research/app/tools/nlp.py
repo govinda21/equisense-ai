@@ -19,7 +19,7 @@ def _ollama_chat(prompt: str) -> str:
         return ""
     try:
         u = urlparse(settings.ollama_base_url)
-        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=60)
+        conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=30)
         body = json.dumps({
             "model": settings.ollama_model, 
             "prompt": prompt, 
@@ -32,8 +32,11 @@ def _ollama_chat(prompt: str) -> str:
         })
         conn.request("POST", "/api/generate", body, headers={"Content-Type": "application/json"})
         resp = conn.getresponse()
+        
         if resp.status != 200:
+            print(f"Ollama API error: {resp.status} - {resp.reason}")
             return ""
+            
         # Get non-streaming response
         content = resp.read().decode("utf-8")
         try:
@@ -52,7 +55,11 @@ def _ollama_chat(prompt: str) -> str:
                 except Exception:
                     continue
             return full_response if full_response else content
-    except Exception:
+    except ConnectionRefusedError:
+        print("Ollama connection refused - Ollama server not running")
+        return ""
+    except Exception as e:
+        print(f"Ollama error: {e}")
         return ""
 
 
