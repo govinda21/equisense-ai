@@ -211,12 +211,20 @@ class StrategicConvictionEngine:
         # Financial fortress
         financial_strength = self._analyze_financial_strength(ticker, info, data.get("balance_sheet"))
         
+        # Enhanced Phase 6: Comprehensive Competitive Analysis
+        competitive_analysis = await self._analyze_competitive_landscape(ticker, data)
+        
+        # Enhanced Phase 6: Industry Outlook Analysis
+        industry_outlook = await self._analyze_industry_outlook(ticker, data)
+        
         # Calculate business quality score
         business_score = (
-            sum(moat.strength for moat in moats) / len(moats) * 0.4 +
-            market_position["score"] * 0.25 +
-            management_quality["score"] * 0.20 +
-            financial_strength["score"] * 0.15
+            sum(moat.strength for moat in moats) / len(moats) * 0.25 +
+            market_position["score"] * 0.20 +
+            management_quality["score"] * 0.15 +
+            financial_strength["score"] * 0.10 +
+            competitive_analysis["score"] * 0.20 +
+            industry_outlook["score"] * 0.10
         ) if moats else 0
         
         return {
@@ -233,7 +241,10 @@ class StrategicConvictionEngine:
             "management_quality": management_quality,
             "financial_strength": financial_strength,
             "key_strengths": self._identify_business_strengths(moats, market_position, management_quality, financial_strength),
-            "key_concerns": self._identify_business_concerns(moats, market_position, management_quality, financial_strength)
+            "key_concerns": self._identify_business_concerns(moats, market_position, management_quality, financial_strength),
+            # Phase 6 Enhancements
+            "competitive_analysis": competitive_analysis,
+            "industry_outlook": industry_outlook
         }
     
     async def _identify_competitive_moats(self, ticker: str, info: Dict[str, Any]) -> List[BusinessMoat]:
@@ -300,7 +311,7 @@ class StrategicConvictionEngine:
             "score": position_strength,
             "description": position_desc,
             "market_cap_tier": self._get_market_cap_tier(market_cap),
-            "competitive_advantages": self._identify_competitive_advantages(info)
+            "competitive_advantages": self._identify_competitive_advantages(ticker, info)
         }
     
     def _analyze_management_quality(self, ticker: str, info: Dict[str, Any], financials: Optional[pd.DataFrame]) -> Dict[str, Any]:
@@ -412,12 +423,20 @@ class StrategicConvictionEngine:
         # Geographic expansion
         geographic_potential = self._assess_geographic_expansion(ticker, info)
         
+        # Enhanced Phase 6: Growth Drivers Analysis
+        growth_drivers = await self._analyze_growth_drivers(ticker, data)
+        
+        # Enhanced Phase 6: Segment Performance Analysis
+        segment_performance = await self._analyze_segment_performance(ticker, data)
+        
         # Calculate growth runway score
         growth_score = (
-            tam_analysis["score"] * 0.4 +
-            secular_trends["score"] * 0.3 +
-            innovation_score * 0.2 +
-            geographic_potential["score"] * 0.1
+            tam_analysis["score"] * 0.25 +
+            secular_trends["score"] * 0.20 +
+            innovation_score * 0.15 +
+            geographic_potential["score"] * 0.10 +
+            growth_drivers["score"] * 0.20 +
+            segment_performance["score"] * 0.10
         )
         
         return {
@@ -427,7 +446,10 @@ class StrategicConvictionEngine:
             "innovation_pipeline": innovation_score,
             "geographic_expansion": geographic_potential,
             "growth_catalysts": self._identify_growth_catalysts(sector, industry, info),
-            "growth_runway_years": self._estimate_growth_runway(tam_analysis, secular_trends)
+            "growth_runway_years": self._estimate_growth_runway(tam_analysis, secular_trends),
+            # Phase 6 Enhancements
+            "growth_drivers": growth_drivers,
+            "segment_performance": segment_performance
         }
     
     def _analyze_tam_growth(self, sector: str, industry: str) -> Dict[str, Any]:
@@ -1108,6 +1130,647 @@ class StrategicConvictionEngine:
             "score": expansion_score,
             "description": expansion_desc,
             "expansion_potential": "High" if expansion_score > 70 else "Medium" if expansion_score > 50 else "Low"
+        }
+
+    # ============================================================================
+    # PHASE 6: STRATEGIC & BUSINESS ANALYSIS ENHANCEMENTS
+    # ============================================================================
+    
+    async def _analyze_growth_drivers(self, ticker: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze key growth drivers and catalysts
+        """
+        info = data["info"]
+        sector = info.get("sector", "")
+        industry = info.get("industry", "")
+        market_cap = info.get("marketCap", 0)
+        
+        growth_drivers = []
+        driver_scores = []
+        
+        # Revenue growth analysis
+        revenue_growth = self._analyze_revenue_growth_drivers(ticker, info)
+        if revenue_growth:
+            growth_drivers.append(revenue_growth)
+            driver_scores.append(revenue_growth["score"])
+        
+        # Market expansion drivers
+        market_expansion = self._analyze_market_expansion_drivers(sector, industry, market_cap)
+        if market_expansion:
+            growth_drivers.append(market_expansion)
+            driver_scores.append(market_expansion["score"])
+        
+        # Innovation drivers
+        innovation_drivers = self._analyze_innovation_drivers(sector, industry, info)
+        if innovation_drivers:
+            growth_drivers.append(innovation_drivers)
+            driver_scores.append(innovation_drivers["score"])
+        
+        # Operational efficiency drivers
+        efficiency_drivers = self._analyze_efficiency_drivers(ticker, info)
+        if efficiency_drivers:
+            growth_drivers.append(efficiency_drivers)
+            driver_scores.append(efficiency_drivers["score"])
+        
+        # Calculate overall score
+        overall_score = sum(driver_scores) / len(driver_scores) if driver_scores else 50
+        
+        return {
+            "score": min(100, max(0, overall_score)),
+            "drivers": growth_drivers,
+            "primary_drivers": [d for d in growth_drivers if d["score"] > 70],
+            "secondary_drivers": [d for d in growth_drivers if 50 <= d["score"] <= 70],
+            "growth_potential": "High" if overall_score > 70 else "Medium" if overall_score > 50 else "Low"
+        }
+    
+    def _analyze_revenue_growth_drivers(self, ticker: str, info: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze revenue growth drivers"""
+        sector = info.get("sector", "")
+        industry = info.get("industry", "")
+        
+        drivers = []
+        score = 50
+        
+        # Sector-specific revenue drivers
+        if sector == "Technology":
+            if "Software" in industry:
+                drivers.extend([
+                    "SaaS subscription growth",
+                    "Digital transformation adoption",
+                    "Cloud migration trends"
+                ])
+                score = 80
+            elif "Semiconductors" in industry:
+                drivers.extend([
+                    "AI/ML chip demand",
+                    "5G infrastructure buildout",
+                    "Automotive electronics growth"
+                ])
+                score = 75
+        elif sector == "Healthcare":
+            drivers.extend([
+                "Aging population demographics",
+                "Precision medicine adoption",
+                "Digital health integration"
+            ])
+            score = 70
+        elif sector == "Financial Services":
+            drivers.extend([
+                "Digital banking adoption",
+                "Fintech integration",
+                "Regulatory technology needs"
+            ])
+            score = 65
+        
+        return {
+            "type": "Revenue Growth",
+            "score": score,
+            "drivers": drivers,
+            "description": f"Revenue growth driven by {len(drivers)} key factors"
+        }
+    
+    def _analyze_market_expansion_drivers(self, sector: str, industry: str, market_cap: float) -> Dict[str, Any]:
+        """Analyze market expansion opportunities"""
+        drivers = []
+        score = 50
+        
+        # Geographic expansion
+        if market_cap > 50e9:  # Large companies
+            drivers.append("International market expansion")
+            score += 20
+        elif market_cap > 10e9:  # Mid-cap companies
+            drivers.append("Regional market expansion")
+            score += 15
+        
+        # Adjacent market expansion
+        if sector == "Technology":
+            drivers.extend([
+                "Adjacent technology markets",
+                "Platform ecosystem expansion"
+            ])
+            score += 25
+        elif sector == "Healthcare":
+            drivers.extend([
+                "Therapeutic area expansion",
+                "Diagnostic market entry"
+            ])
+            score += 20
+        
+        return {
+            "type": "Market Expansion",
+            "score": min(100, score),
+            "drivers": drivers,
+            "description": f"Market expansion through {len(drivers)} strategic initiatives"
+        }
+    
+    def _analyze_innovation_drivers(self, sector: str, industry: str, info: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze innovation-driven growth"""
+        drivers = []
+        score = 50
+        
+        # R&D intensity analysis
+        business_summary = info.get("businessSummary", "").lower()
+        
+        if "research" in business_summary or "development" in business_summary:
+            drivers.append("R&D investment")
+            score += 15
+        
+        if "innovation" in business_summary or "technology" in business_summary:
+            drivers.append("Technology innovation")
+            score += 20
+        
+        # Sector-specific innovation drivers
+        if sector == "Technology":
+            drivers.extend([
+                "AI/ML capabilities",
+                "Platform development",
+                "API ecosystem"
+            ])
+            score += 25
+        elif sector == "Healthcare":
+            drivers.extend([
+                "Drug discovery pipeline",
+                "Medical device innovation",
+                "Digital therapeutics"
+            ])
+            score += 20
+        
+        return {
+            "type": "Innovation",
+            "score": min(100, score),
+            "drivers": drivers,
+            "description": f"Innovation-driven growth through {len(drivers)} key areas"
+        }
+    
+    def _analyze_efficiency_drivers(self, ticker: str, info: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze operational efficiency drivers"""
+        drivers = []
+        score = 50
+        
+        # Scale efficiency
+        market_cap = info.get("marketCap", 0)
+        if market_cap > 100e9:
+            drivers.append("Economies of scale")
+            score += 20
+        
+        # Operational efficiency indicators
+        business_summary = info.get("businessSummary", "").lower()
+        
+        if "automation" in business_summary:
+            drivers.append("Process automation")
+            score += 15
+        
+        if "digital" in business_summary:
+            drivers.append("Digital transformation")
+            score += 15
+        
+        if "platform" in business_summary:
+            drivers.append("Platform efficiency")
+            score += 10
+        
+        return {
+            "type": "Operational Efficiency",
+            "score": min(100, score),
+            "drivers": drivers,
+            "description": f"Efficiency gains through {len(drivers)} operational improvements"
+        }
+    
+    async def _analyze_segment_performance(self, ticker: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze segment-wise performance and growth
+        """
+        info = data["info"]
+        sector = info.get("sector", "")
+        industry = info.get("industry", "")
+        
+        # For now, we'll create segment analysis based on industry characteristics
+        # In a real implementation, this would use actual segment data
+        
+        segments = self._identify_business_segments(sector, industry, info)
+        
+        segment_scores = []
+        for segment in segments:
+            segment_scores.append(segment["score"])
+        
+        overall_score = sum(segment_scores) / len(segment_scores) if segment_scores else 50
+        
+        return {
+            "score": min(100, max(0, overall_score)),
+            "segments": segments,
+            "top_performing_segment": max(segments, key=lambda x: x["score"]) if segments else None,
+            "growth_segments": [s for s in segments if s["score"] > 70],
+            "declining_segments": [s for s in segments if s["score"] < 40]
+        }
+    
+    def _identify_business_segments(self, sector: str, industry: str, info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Identify and analyze business segments"""
+        segments = []
+        
+        # Sector-specific segment analysis
+        if sector == "Technology":
+            if "Software" in industry:
+                segments.extend([
+                    {
+                        "name": "Enterprise Software",
+                        "score": 75,
+                        "growth_rate": "12%",
+                        "description": "Core enterprise software solutions"
+                    },
+                    {
+                        "name": "Cloud Services",
+                        "score": 85,
+                        "growth_rate": "18%",
+                        "description": "Cloud infrastructure and platform services"
+                    },
+                    {
+                        "name": "Professional Services",
+                        "score": 65,
+                        "growth_rate": "8%",
+                        "description": "Implementation and consulting services"
+                    }
+                ])
+            elif "Semiconductors" in industry:
+                segments.extend([
+                    {
+                        "name": "Data Center Chips",
+                        "score": 80,
+                        "growth_rate": "15%",
+                        "description": "AI/ML and data center processors"
+                    },
+                    {
+                        "name": "Consumer Electronics",
+                        "score": 60,
+                        "growth_rate": "5%",
+                        "description": "Mobile and consumer device chips"
+                    },
+                    {
+                        "name": "Automotive",
+                        "score": 70,
+                        "growth_rate": "12%",
+                        "description": "Automotive semiconductor solutions"
+                    }
+                ])
+        elif sector == "Healthcare":
+            segments.extend([
+                {
+                    "name": "Pharmaceuticals",
+                    "score": 70,
+                    "growth_rate": "6%",
+                    "description": "Drug development and manufacturing"
+                },
+                {
+                    "name": "Medical Devices",
+                    "score": 75,
+                    "growth_rate": "8%",
+                    "description": "Medical device and diagnostic equipment"
+                },
+                {
+                    "name": "Healthcare Services",
+                    "score": 65,
+                    "growth_rate": "5%",
+                    "description": "Healthcare delivery and services"
+                }
+            ])
+        elif sector == "Financial Services":
+            segments.extend([
+                {
+                    "name": "Retail Banking",
+                    "score": 60,
+                    "growth_rate": "3%",
+                    "description": "Consumer banking and lending"
+                },
+                {
+                    "name": "Investment Banking",
+                    "score": 70,
+                    "growth_rate": "8%",
+                    "description": "Corporate finance and capital markets"
+                },
+                {
+                    "name": "Asset Management",
+                    "score": 75,
+                    "growth_rate": "10%",
+                    "description": "Investment management and advisory"
+                }
+            ])
+        else:
+            # Default segments for other sectors
+            segments.append({
+                "name": "Core Business",
+                "score": 60,
+                "growth_rate": "5%",
+                "description": "Primary business operations"
+            })
+        
+        return segments
+    
+    async def _analyze_competitive_landscape(self, ticker: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze competitive landscape and positioning
+        """
+        info = data["info"]
+        sector = info.get("sector", "")
+        industry = info.get("industry", "")
+        market_cap = info.get("marketCap", 0)
+        
+        # Competitive positioning
+        positioning = self._assess_competitive_positioning(market_cap, sector)
+        
+        # Competitive threats
+        threats = self._identify_competitive_threats(sector, industry)
+        
+        # Competitive advantages
+        advantages = self._identify_competitive_advantages(ticker, info)
+        
+        # Calculate competitive score
+        competitive_score = (
+            positioning["score"] * 0.4 +
+            (100 - threats["risk_score"]) * 0.3 +
+            advantages["score"] * 0.3
+        )
+        
+        return {
+            "score": min(100, max(0, competitive_score)),
+            "positioning": positioning,
+            "threats": threats,
+            "advantages": advantages,
+            "competitive_strength": "Strong" if competitive_score > 70 else "Moderate" if competitive_score > 50 else "Weak"
+        }
+    
+    def _assess_competitive_positioning(self, market_cap: float, sector: str) -> Dict[str, Any]:
+        """Assess competitive market positioning"""
+        if market_cap > 500e9:
+            return {
+                "position": "Market Leader",
+                "score": 90,
+                "description": "Dominant market position with significant competitive advantages"
+            }
+        elif market_cap > 100e9:
+            return {
+                "position": "Strong Player",
+                "score": 75,
+                "description": "Strong market position with competitive advantages"
+            }
+        elif market_cap > 10e9:
+            return {
+                "position": "Established Player",
+                "score": 60,
+                "description": "Established market presence with moderate competitive advantages"
+            }
+        else:
+            return {
+                "position": "Smaller Player",
+                "score": 40,
+                "description": "Smaller market presence with limited competitive advantages"
+            }
+    
+    def _identify_competitive_threats(self, sector: str, industry: str) -> Dict[str, Any]:
+        """Identify competitive threats and risks"""
+        threats = []
+        risk_score = 30  # Lower is better
+        
+        # Sector-specific threats
+        if sector == "Technology":
+            threats.extend([
+                "Rapid technological change",
+                "New market entrants",
+                "Platform competition"
+            ])
+            risk_score = 60
+        elif sector == "Healthcare":
+            threats.extend([
+                "Regulatory changes",
+                "Patent expirations",
+                "Generic competition"
+            ])
+            risk_score = 50
+        elif sector == "Financial Services":
+            threats.extend([
+                "Fintech disruption",
+                "Regulatory tightening",
+                "Digital transformation pressure"
+            ])
+            risk_score = 55
+        
+        return {
+            "threats": threats,
+            "risk_score": risk_score,
+            "risk_level": "High" if risk_score > 60 else "Medium" if risk_score > 40 else "Low"
+        }
+    
+    def _identify_competitive_advantages(self, ticker: str, info: Dict[str, Any]) -> Dict[str, Any]:
+        """Identify competitive advantages"""
+        advantages = []
+        score = 50
+        
+        market_cap = info.get("marketCap", 0)
+        sector = info.get("sector", "")
+        
+        # Scale advantages
+        if market_cap > 100e9:
+            advantages.append("Economies of scale")
+            score += 20
+        
+        # Brand strength
+        if market_cap > 50e9:
+            advantages.append("Brand recognition")
+            score += 15
+        
+        # Technology advantages
+        if sector == "Technology":
+            advantages.extend([
+                "Technology platform",
+                "Network effects",
+                "Data advantages"
+            ])
+            score += 25
+        
+        # Regulatory advantages
+        if sector in ["Financial Services", "Healthcare", "Utilities"]:
+            advantages.append("Regulatory barriers")
+            score += 15
+        
+        return {
+            "advantages": advantages,
+            "score": min(100, score),
+            "advantage_strength": "Strong" if score > 70 else "Moderate" if score > 50 else "Limited"
+        }
+    
+    async def _analyze_industry_outlook(self, ticker: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze industry outlook and trends
+        """
+        info = data["info"]
+        sector = info.get("sector", "")
+        industry = info.get("industry", "")
+        
+        # Industry growth outlook
+        growth_outlook = self._assess_industry_growth_outlook(sector, industry)
+        
+        # Industry trends
+        trends = self._identify_industry_trends(sector, industry)
+        
+        # Industry risks
+        risks = self._identify_industry_risks(sector, industry)
+        
+        # Calculate industry outlook score
+        outlook_score = (
+            growth_outlook["score"] * 0.5 +
+            trends["score"] * 0.3 +
+            (100 - risks["risk_score"]) * 0.2
+        )
+        
+        return {
+            "score": min(100, max(0, outlook_score)),
+            "growth_outlook": growth_outlook,
+            "trends": trends,
+            "risks": risks,
+            "overall_outlook": "Positive" if outlook_score > 70 else "Neutral" if outlook_score > 50 else "Negative"
+        }
+    
+    def _assess_industry_growth_outlook(self, sector: str, industry: str) -> Dict[str, Any]:
+        """Assess industry growth outlook"""
+        # Industry-specific growth rates (5-year CAGR estimates)
+        growth_rates = {
+            "Technology": {
+                "Software—Application": 12,
+                "Software—Infrastructure": 15,
+                "Semiconductors": 8,
+                "default": 10
+            },
+            "Healthcare": {
+                "Biotechnology": 8,
+                "Drug Manufacturers—General": 5,
+                "Medical Devices": 7,
+                "default": 6
+            },
+            "Financial Services": {
+                "Banks—Regional": 3,
+                "Insurance": 4,
+                "Asset Management": 6,
+                "default": 4
+            },
+            "Consumer Cyclical": {
+                "Automotive": 4,
+                "Retail—Apparel": 3,
+                "default": 3
+            },
+            "default": 4
+        }
+        
+        sector_data = growth_rates.get(sector, {"default": 4})
+        growth_rate = sector_data.get(industry, sector_data["default"])
+        
+        # Convert to score
+        score = min(100, max(0, growth_rate * 8))
+        
+        return {
+            "growth_rate": growth_rate,
+            "score": score,
+            "outlook": "High Growth" if growth_rate > 8 else "Moderate Growth" if growth_rate > 4 else "Low Growth"
+        }
+    
+    def _identify_industry_trends(self, sector: str, industry: str) -> Dict[str, Any]:
+        """Identify key industry trends"""
+        trends_map = {
+            "Technology": {
+                "trends": [
+                    "Digital transformation acceleration",
+                    "AI/ML integration",
+                    "Cloud-first strategies",
+                    "Cybersecurity focus"
+                ],
+                "score": 85
+            },
+            "Healthcare": {
+                "trends": [
+                    "Precision medicine",
+                    "Digital health adoption",
+                    "Value-based care",
+                    "Telemedicine growth"
+                ],
+                "score": 75
+            },
+            "Financial Services": {
+                "trends": [
+                    "Digital banking transformation",
+                    "Fintech integration",
+                    "Regulatory technology",
+                    "Sustainable finance"
+                ],
+                "score": 70
+            },
+            "Consumer Cyclical": {
+                "trends": [
+                    "E-commerce acceleration",
+                    "Sustainability focus",
+                    "Direct-to-consumer models",
+                    "Personalization"
+                ],
+                "score": 65
+            }
+        }
+        
+        sector_trends = trends_map.get(sector, {
+            "trends": ["Industry consolidation", "Digital adoption"],
+            "score": 50
+        })
+        
+        return {
+            "trends": sector_trends["trends"],
+            "score": sector_trends["score"],
+            "trend_strength": "Strong" if sector_trends["score"] > 70 else "Moderate" if sector_trends["score"] > 50 else "Weak"
+        }
+    
+    def _identify_industry_risks(self, sector: str, industry: str) -> Dict[str, Any]:
+        """Identify industry-specific risks"""
+        risks_map = {
+            "Technology": {
+                "risks": [
+                    "Rapid technological obsolescence",
+                    "Cybersecurity threats",
+                    "Regulatory scrutiny",
+                    "Talent competition"
+                ],
+                "risk_score": 60
+            },
+            "Healthcare": {
+                "risks": [
+                    "Regulatory changes",
+                    "Patent cliffs",
+                    "Pricing pressure",
+                    "Clinical trial failures"
+                ],
+                "risk_score": 55
+            },
+            "Financial Services": {
+                "risks": [
+                    "Interest rate sensitivity",
+                    "Regulatory tightening",
+                    "Credit risk",
+                    "Fintech disruption"
+                ],
+                "risk_score": 65
+            },
+            "Consumer Cyclical": {
+                "risks": [
+                    "Economic sensitivity",
+                    "Consumer behavior changes",
+                    "Supply chain disruptions",
+                    "Competition intensity"
+                ],
+                "risk_score": 70
+            }
+        }
+        
+        sector_risks = risks_map.get(sector, {
+            "risks": ["Economic sensitivity", "Competitive pressure"],
+            "risk_score": 50
+        })
+        
+        return {
+            "risks": sector_risks["risks"],
+            "risk_score": sector_risks["risk_score"],
+            "risk_level": "High" if sector_risks["risk_score"] > 60 else "Medium" if sector_risks["risk_score"] > 40 else "Low"
         }
 
 

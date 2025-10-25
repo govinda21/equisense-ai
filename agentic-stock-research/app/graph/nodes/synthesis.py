@@ -1577,13 +1577,14 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
     ticker = state["tickers"][0]
     a = state.get("analysis", {})
     
-    # DEBUG: Check what keys are in the analysis dictionary
-    logger.info(f"DEBUG synthesis: analysis keys available: {list(a.keys())}")
+    # Log synthesis start
+    logger.info(f"Starting synthesis for {ticker} with enhanced DCF scenarios")
 
     news = a.get("news_sentiment", {})
     yt = a.get("youtube", {})
     tech = a.get("technicals", {})
-    fund = a.get("comprehensive_fundamentals", {})
+    # Get fundamentals data (prioritize fundamentals key for workflow compatibility)
+    fund = a.get("fundamentals", {}) or a.get("comprehensive_fundamentals", {})
     peer = a.get("peer_analysis", {})
     analyst = a.get("analyst_recommendations", {})
     cash = a.get("cashflow", {})
@@ -1593,6 +1594,12 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
     valuation = a.get("valuation", {})
     strategic_conviction = a.get("strategic_conviction", {})
     sector_rotation = a.get("sector_rotation", {})
+    
+    # Add detailed logging for data flow tracing
+    logger.info(f"🔍 Synthesis sees comprehensive_fundamentals keys: {list(fund.keys()) if fund else 'empty'}")
+    logger.info(f"🔍 Synthesis sees fundamentals data available: {bool(fund)}")
+    logger.info(f"🔍 Synthesis sees deep_financial_analysis: {'deep_financial_analysis' in fund if fund else False}")
+    logger.info(f"🔍 Synthesis sees dcf_valuation: {'dcf_valuation' in fund if fund else False}")
     
     # Get current price from comprehensive fundamentals or technicals
     current_price = fund.get("current_price") or tech.get("current_price")
@@ -1953,6 +1960,9 @@ RETURN: [X.X]%"""
     state["final_output"]["reports"][0]["decision"] = {
                     "action": action,
                     "rating": round(composite_score * 5, 2),
+                    # Backward compatibility fields
+                    "recommendation": action,
+                    "score": round(composite_score * 5, 2),
                     "letter_grade": _safe_get_letter_grade(composite_score),
                     "stars": _safe_get_star_display(composite_score),
                     "professional_rationale": _safe_get_professional_rationale(
@@ -1970,6 +1980,9 @@ RETURN: [X.X]%"""
                     "conviction_level": strategic_conviction["details"].get("conviction_level", "Medium Conviction") if strategic_conviction and "details" in strategic_conviction else "Medium Conviction",
                     "conviction_score": strategic_conviction["details"].get("overall_conviction_score", 50.0) if strategic_conviction and "details" in strategic_conviction else 50.0,
                     "strategic_recommendation": strategic_conviction["details"].get("strategic_recommendation", "Hold") if strategic_conviction and "details" in strategic_conviction else "Hold",
+                    
+                    # Additional fields for frontend compatibility
+                    "confidence_score": round(composite_score * 100, 1),
                     
                     # Senior Equity Analyst Report Components
                     "executive_summary": senior_recommendation["executive_summary"],

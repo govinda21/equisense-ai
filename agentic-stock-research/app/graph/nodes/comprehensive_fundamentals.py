@@ -1,13 +1,16 @@
 """
-Comprehensive Fundamentals Analysis Node
-Integrates DCF valuation, governance analysis, and comprehensive scoring
+Comprehensive Fundamentals Analysis Node - Phase 2 Enhanced
+Integrates DCF valuation, governance analysis, comprehensive scoring, and deep financial analysis
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 
 from app.config import AppSettings
 from app.graph.state import ResearchState
@@ -16,6 +19,7 @@ from app.tools.dcf_valuation import perform_dcf_valuation
 from app.tools.governance_analysis import analyze_corporate_governance
 from app.tools.indian_market_data import get_indian_market_data
 from app.tools.fundamentals import compute_fundamentals
+from app.tools.deep_financial_analysis import DeepFinancialAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +83,10 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
                 analyze_corporate_governance(ticker),
                 get_indian_market_data(ticker),
                 score_stock_comprehensively(ticker, current_price),
+                DeepFinancialAnalyzer().analyze_financial_history(ticker, years_back=10),
                 return_exceptions=True
             ),
-            timeout=45.0  # 45 second timeout for all fundamental analysis
+            timeout=60.0  # Back to original timeout
         )
         
         # Process results
@@ -90,6 +95,7 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
         governance_analysis = analysis_results[2] if not isinstance(analysis_results[2], Exception) else {}
         indian_market_data = analysis_results[3] if not isinstance(analysis_results[3], Exception) else {}
         comprehensive_score = analysis_results[4] if not isinstance(analysis_results[4], Exception) else None
+        deep_financial_analysis = analysis_results[5] if not isinstance(analysis_results[5], Exception) else {}
         
         # Convert DCFOutputs to dictionary with expected keys
         dcf_valuation = {}
@@ -129,6 +135,7 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
             "dcf_valuation": dcf_valuation,
             "governance_analysis": governance_analysis,
             "indian_market_data": indian_market_data,
+            "deep_financial_analysis": deep_financial_analysis,
             
             # Comprehensive scoring
             "overall_score": comprehensive_score.overall_score if comprehensive_score else 50.0,
@@ -204,12 +211,26 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
                 "dcf_valuation": "high" if "error" not in dcf_valuation else "low",
                 "governance": "medium" if governance_analysis else "low",
                 "indian_data": "medium" if "error" not in indian_market_data else "low",
+                "deep_financial_analysis": "high" if deep_financial_analysis and "summary" in deep_financial_analysis else "low",
                 "overall_quality": _assess_overall_data_quality(analysis_results)
             }
         }
         
         # Update state with comprehensive analysis
+        # Store under "fundamentals" key to match workflow node name
+        state.setdefault("analysis", {})["fundamentals"] = comprehensive_analysis
+        # Also store under "comprehensive_fundamentals" for backward compatibility
         state.setdefault("analysis", {})["comprehensive_fundamentals"] = comprehensive_analysis
+        
+        # Add detailed logging for data flow tracing
+        logger.info(f"✅ Stored comprehensive_fundamentals keys: {list(comprehensive_analysis.keys())}")
+        logger.info(f"✅ Data quality: {comprehensive_analysis.get('data_quality', 'unknown')}")
+        logger.info(f"✅ Deep financial analysis available: {'deep_financial_analysis' in comprehensive_analysis}")
+        logger.info(f"✅ DCF valuation available: {'dcf_valuation' in comprehensive_analysis}")
+        logger.info(f"✅ Comprehensive scoring available: {'comprehensive_score' in comprehensive_analysis}")
+        
+        # Log comprehensive fundamentals completion
+        logger.info(f"Comprehensive fundamentals analysis completed for {ticker} with enhanced DCF scenarios")
         
         # Set confidence based on comprehensive scoring confidence
         confidence = comprehensive_score.confidence_level if comprehensive_score else 0.5

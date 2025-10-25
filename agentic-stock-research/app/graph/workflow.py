@@ -30,6 +30,8 @@ from app.graph.nodes.strategic_conviction import strategic_conviction_node
 from app.graph.nodes.sector_rotation import sector_rotation_node
 from app.graph.nodes.synthesis import synthesis_node
 from app.graph.nodes.synthesis_multi import enhanced_synthesis_node
+from app.graph.nodes.enhanced_synthesis import synthesis_node as institutional_synthesis_node
+from app.graph.nodes.conditional_synthesis import synthesis_node as conditional_synthesis_node
 
 
 def _wrap(node_fn: Callable[[ResearchState, AppSettings], Any], settings: AppSettings):
@@ -59,8 +61,8 @@ def build_research_graph(settings: AppSettings):
     graph.add_node("earnings_call_analysis", _wrap(earnings_call_analysis_node, settings))
     graph.add_node("strategic_conviction", _wrap(strategic_conviction_node, settings))
     graph.add_node("sector_rotation", _wrap(sector_rotation_node, settings))
-    # Use simple synthesis (enhanced version has data explosion bug)
-    graph.add_node("synthesis", _wrap(synthesis_node, settings))
+    # Use conditional synthesis (chooses between institutional and standard)
+    graph.add_node("synthesis", _wrap(conditional_synthesis_node, settings))
 
     graph.set_entry_point("start")
     graph.add_edge("start", "data_collection")

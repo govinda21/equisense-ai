@@ -29,6 +29,7 @@ from app.graph.workflow import build_research_graph
 from app.api.reports import router as reports_router
 # from app.api.auth import router as auth_router  # Disabled for now
 from app.api.realtime import router as realtime_router
+from app.api.institutional import institutional_router
 
 
 def create_app() -> FastAPI:
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     app.include_router(reports_router)
     # app.include_router(auth_router)  # Disabled for now
     app.include_router(realtime_router)
+    app.include_router(institutional_router)
     
     # Custom validation error handler for better debugging
     @app.exception_handler(RequestValidationError)
@@ -233,6 +235,7 @@ def create_app() -> FastAPI:
                 "horizon_short_days": req.horizon_short_days,
                 "horizon_long_days": req.horizon_long_days,
                 "country": country,
+                "analysis_type": "institutional" if req.horizon_short_days and req.horizon_long_days else "standard",
             }
             callbacks = None
             # If Langfuse callback is available from compiled graph, use it

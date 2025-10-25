@@ -284,15 +284,24 @@ class SectorRotationAnalyzer:
         else:
             recommendations["key_insights"].append(f"{stock_sector_name} sector showing neutral performance ({sector_return*100:+.1f}%)")
         
-        # Momentum analysis
-        if sector_momentum > 0.02:  # 2%+ momentum
-            recommendations["rotation_signal"] = "Buy"
-            recommendations["key_insights"].append(f"{stock_sector_name} showing strong momentum ({sector_momentum*100:+.1f}%)")
-        elif sector_momentum < -0.02:  # -2%+ momentum
-            recommendations["rotation_signal"] = "Sell"
-            recommendations["key_insights"].append(f"{stock_sector_name} showing negative momentum ({sector_momentum*100:+.1f}%)")
-        else:
-            recommendations["key_insights"].append(f"{stock_sector_name} momentum neutral ({sector_momentum*100:+.1f}%)")
+        # Momentum analysis (only if significant)
+        if abs(sector_momentum) > 0.02:  # Only show if momentum is significant
+            if sector_momentum > 0.02:
+                recommendations["rotation_signal"] = "Buy"
+                recommendations["key_insights"].append(f"Strong momentum trend ({sector_momentum*100:+.1f}%)")
+            else:
+                recommendations["rotation_signal"] = "Sell"
+                recommendations["key_insights"].append(f"Negative momentum trend ({sector_momentum*100:+.1f}%)")
+        
+        # Add market context (only if significant)
+        market_breadth = rotation_analysis.get("market_breadth", 0.5)
+        if market_breadth > 0.7:
+            recommendations["key_insights"].append("Broad market strength supporting sector rotation")
+        elif market_breadth < 0.3:
+            recommendations["key_insights"].append("Narrow leadership - selective sector opportunities")
+        
+        # Remove duplicates from key insights
+        recommendations["key_insights"] = list(dict.fromkeys(recommendations["key_insights"]))
         
         # Rotation phase recommendations with sector-specific guidance
         rotation_phase = rotation_analysis.get("rotation_phase", "Uncertain Rotation")
@@ -308,13 +317,6 @@ class SectorRotationAnalyzer:
             recommendations["action_items"].append("Focus on sector-specific opportunities")
             recommendations["action_items"].append("Monitor individual sector momentum trends")
             recommendations["action_items"].append("Consider diversified sector allocation")
-        
-        # Market breadth insights
-        market_breadth = rotation_analysis.get("market_breadth", 0)
-        if market_breadth > 0.7:
-            recommendations["key_insights"].append("Broad market strength supporting sector rotation")
-        elif market_breadth < 0.3:
-            recommendations["key_insights"].append("Narrow market leadership - selective opportunities")
         
         return recommendations
     
@@ -466,55 +468,52 @@ class SectorRotationAnalyzer:
             logger.warning(f"Error calculating momentum score: {e}")
             return 0.5
     
-    def _generate_rotation_signals(self, sector_performance: Dict[str, Any], rotation_analysis: Dict[str, Any]) -> List[str]:
+    def _generate_rotation_signals(self, sector_performance: Dict[str, Any], rotation_analysis: Dict[str, Any]) -> List[Dict[str, str]]:
         """Generate specific, actionable rotation signals for UI display"""
         signals = []
         
         try:
-            # Top performers with specific returns
+            # Top performer (only the best one to avoid redundancy)
             top_performers = rotation_analysis.get("top_performers", [])
             if top_performers:
-                for sector in top_performers[:3]:
-                    sector_data = sector_performance.get(sector, {})
-                    return_pct = sector_data.get("total_return", 0) * 100
-                    signals.append(f"{sector} sector up {return_pct:.1f}% - leading market")
+                sector = top_performers[0]  # Only show the top performer
+                sector_data = sector_performance.get(sector, {})
+                return_pct = sector_data.get("total_return", 0) * 100
+                signals.append({
+                    "signal_type": "Leading Sector",
+                    "description": f"{sector} sector leading with {return_pct:.1f}% returns"
+                })
             
-            # Top momentum with specific momentum scores
-            top_momentum = rotation_analysis.get("top_momentum", [])
-            if top_momentum:
-                for sector in top_momentum[:3]:
-                    sector_data = sector_performance.get(sector, {})
-                    momentum_pct = sector_data.get("momentum", 0) * 100
-                    signals.append(f"{sector} momentum {momentum_pct:+.1f}% - accelerating trend")
-            
-            # Rotation phase with specific implications
+            # Rotation phase (most important signal)
             rotation_phase = rotation_analysis.get("rotation_phase", "Uncertain Rotation")
             if "Risk-Off" in rotation_phase:
-                signals.append("Risk-off rotation: Defensive sectors favored")
+                signals.append({
+                    "signal_type": "Market Phase",
+                    "description": "Risk-off rotation favoring defensive sectors"
+                })
             elif "Risk-On" in rotation_phase:
-                signals.append("Risk-on rotation: Cyclical sectors gaining momentum")
+                signals.append({
+                    "signal_type": "Market Phase", 
+                    "description": "Risk-on rotation favoring cyclical sectors"
+                })
             elif "Mixed" in rotation_phase:
-                signals.append("Mixed rotation: Sector-specific opportunities")
-            else:
-                signals.append(f"Current phase: {rotation_phase}")
+                signals.append({
+                    "signal_type": "Market Phase",
+                    "description": "Mixed rotation creating sector-specific opportunities"
+                })
             
-            # Market breadth with specific implications
+            # Market breadth (only if significant)
             market_breadth = rotation_analysis.get("market_breadth", 0.5)
             if market_breadth > 0.7:
-                signals.append("Broad market strength: Diversified sector participation")
+                signals.append({
+                    "signal_type": "Market Breadth",
+                    "description": "Broad market strength with diversified participation"
+                })
             elif market_breadth < 0.3:
-                signals.append("Narrow leadership: Focus on outperforming sectors")
-            else:
-                signals.append("Moderate breadth: Balanced sector performance")
-            
-            # Add sector count for context
-            sector_count = len(sector_performance)
-            if sector_count > 0:
-                signals.append(f"Analyzing {sector_count} sectors for rotation patterns")
-            
-            # Add timing indicators
-            timing_signals = self._generate_timing_indicators(sector_performance, rotation_analysis)
-            signals.extend(timing_signals)
+                signals.append({
+                    "signal_type": "Market Breadth",
+                    "description": "Narrow leadership - focus on outperforming sectors"
+                })
             
         except Exception as e:
             logger.warning(f"Error generating rotation signals: {e}")

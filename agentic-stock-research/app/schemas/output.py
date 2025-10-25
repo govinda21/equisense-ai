@@ -17,6 +17,11 @@ class Decision(BaseModel):
     top_reasons_for: List[str]
     top_reasons_against: List[str]
     
+    # Backward compatibility fields
+    recommendation: Optional[str] = Field(default=None)  # Maps to action
+    score: Optional[float] = Field(default=None)  # Maps to rating
+    confidence_score: Optional[float] = Field(default=None)  # Confidence percentage
+    
     # Professional equity research fields
     letter_grade: str = Field(default="C")
     stars: str = Field(default="★★★☆☆")

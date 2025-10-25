@@ -63,9 +63,11 @@
 *Please add your specific instructions below:*
 
 ### Your Instructions:
-- You are an expert maket analyst and an excellant coder
-- [ ] Add your preferred approaches here
-- [ ] Add your quality standards here
+- You are an expert market analyst and an excellant coder
+- Do not create additional file unless it is needed
+- Make sure UI must reflect the changes.
+- first analyze throughly, create a plan and then execute effectively
+- If you introduce any error, resolve this as well
 - [ ] Add any other guidelines here
 
 ---

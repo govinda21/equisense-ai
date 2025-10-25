@@ -408,7 +408,7 @@ class YahooFinanceClient:
         self.cache = {}  # Simple in-memory cache
         
     async def download(self, ticker: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
-        """Download stock data with rate limiting"""
+        """Download stock data with rate limiting and fallback for Indian stocks"""
         cache_key = f"{ticker}_{period}_{interval}"
         
         if cache_key in self.cache:
@@ -424,25 +424,99 @@ class YahooFinanceClient:
                 lambda: yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
             )
             
-            if data.empty:
-                logger.warning(f"No data returned for {ticker}")
-                return pd.DataFrame()
+            # If we got data, cache and return it
+            if not data.empty:
+                self.cache[cache_key] = data
+                return data
             
-            # Cache the result
-            self.cache[cache_key] = data
-            return data
+            # For Indian stocks (.NS), try alternative symbol formats
+            if ticker.endswith('.NS'):
+                logger.warning(f"No price data found for {ticker}, trying alternative formats")
+                
+                # Try without .NS suffix
+                alt_ticker = ticker.replace('.NS', '')
+                try:
+                    data_alt = await loop.run_in_executor(
+                        None,
+                        lambda: yf.download(alt_ticker, period=period, interval=interval, progress=False, auto_adjust=True)
+                    )
+                    if not data_alt.empty:
+                        logger.info(f"Found price data for {alt_ticker} (alternative format)")
+                        self.cache[cache_key] = data_alt
+                        return data_alt
+                except Exception as e:
+                    logger.debug(f"Alternative format {alt_ticker} also failed: {e}")
+                
+                # Try BSE format (.BO)
+                bse_ticker = alt_ticker + '.BO'
+                try:
+                    data_bse = await loop.run_in_executor(
+                        None,
+                        lambda: yf.download(bse_ticker, period=period, interval=interval, progress=False, auto_adjust=True)
+                    )
+                    if not data_bse.empty:
+                        logger.info(f"Found price data for {bse_ticker} (BSE format)")
+                        self.cache[cache_key] = data_bse
+                        return data_bse
+                except Exception as e:
+                    logger.debug(f"BSE format {bse_ticker} also failed: {e}")
+            
+            logger.warning(f"No data returned for {ticker} from any format")
+            return pd.DataFrame()
+            
+        except Exception as e:
+            logger.error(f"Failed to download data for {ticker}: {e}")
+            return pd.DataFrame()
         finally:
             self.client.rate_limiter.release()
     
     async def get_info(self, ticker: str) -> Dict[str, Any]:
-        """Get stock info with rate limiting"""
+        """Get stock info with rate limiting and fallback for Indian stocks"""
         # Simple rate limiting for yfinance calls
         await self.client.rate_limiter.acquire()
         try:
             loop = asyncio.get_event_loop()
+            
+            # Try the original ticker first
             stock = await loop.run_in_executor(None, lambda: yf.Ticker(ticker))
             info = await loop.run_in_executor(None, lambda: stock.info)
+            
+            # If we got data, return it
+            if info and len(info) > 5:  # Basic validation - should have more than 5 fields
+                return info
+            
+            # For Indian stocks (.NS), try alternative symbol formats
+            if ticker.endswith('.NS'):
+                logger.warning(f"No data found for {ticker}, trying alternative formats")
+                
+                # Try without .NS suffix
+                alt_ticker = ticker.replace('.NS', '')
+                try:
+                    stock_alt = await loop.run_in_executor(None, lambda: yf.Ticker(alt_ticker))
+                    info_alt = await loop.run_in_executor(None, lambda: stock_alt.info)
+                    if info_alt and len(info_alt) > 5:
+                        logger.info(f"Found data for {alt_ticker} (alternative format)")
+                        return info_alt
+                except Exception as e:
+                    logger.debug(f"Alternative format {alt_ticker} also failed: {e}")
+                
+                # Try BSE format (.BO)
+                bse_ticker = alt_ticker + '.BO'
+                try:
+                    stock_bse = await loop.run_in_executor(None, lambda: yf.Ticker(bse_ticker))
+                    info_bse = await loop.run_in_executor(None, lambda: stock_bse.info)
+                    if info_bse and len(info_bse) > 5:
+                        logger.info(f"Found data for {bse_ticker} (BSE format)")
+                        return info_bse
+                except Exception as e:
+                    logger.debug(f"BSE format {bse_ticker} also failed: {e}")
+            
+            # Return whatever we got (even if empty)
             return info or {}
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch info for {ticker}: {e}")
+            return {}
         finally:
             self.client.rate_limiter.release()
 

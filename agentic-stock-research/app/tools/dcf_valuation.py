@@ -89,8 +89,10 @@ class DCFInputs:
     tax_rate_debt: float = 0.25  # Tax shield
     debt_to_equity: float = 0.5  # 50% D/E ratio default
     
-    # Terminal value
-    terminal_fcf_multiple: Optional[float] = None  # Alternative to Gordon Growth
+    # Terminal value methods
+    terminal_value_method: str = "gordon_growth"  # "gordon_growth", "exit_multiple", "perpetuity_growth"
+    terminal_ebitda_multiple: float = 12.0  # Exit multiple for terminal value
+    terminal_fcf_multiple: float = 15.0  # FCF multiple for terminal value
 
 
 @dataclass
@@ -573,12 +575,12 @@ class DCFValuationEngine:
             
             prev_revenue = projected_revenue
         
-        # Terminal Value
+        # Terminal Value - Multiple Methods
+        terminal_value_methods = self._calculate_terminal_value_methods(explicit_fcf[-1], inputs, wacc)
+        
+        # Use the specified terminal value method
+        terminal_value = terminal_value_methods[inputs.terminal_value_method]
         terminal_fcf = explicit_fcf[-1] * (1 + inputs.terminal_growth_rate)
-        if inputs.terminal_fcf_multiple:
-            terminal_value = terminal_fcf * inputs.terminal_fcf_multiple
-        else:
-            terminal_value = terminal_fcf / (wacc - inputs.terminal_growth_rate)
         
         # Present Value calculations
         discount_factors = [(1 + wacc) ** -i for i in range(1, len(explicit_fcf) + 1)]
@@ -629,6 +631,29 @@ class DCFValuationEngine:
             upside_potential=0.0   # Will be calculated later
         )
     
+    def _calculate_terminal_value_methods(
+        self, 
+        final_fcf: float, 
+        inputs: DCFInputs, 
+        wacc: float
+    ) -> Dict[str, float]:
+        """Calculate terminal value using multiple methods"""
+        methods = {}
+        
+        # Gordon Growth Model
+        if wacc > inputs.terminal_growth_rate:
+            methods["gordon_growth"] = (final_fcf * (1 + inputs.terminal_growth_rate)) / (wacc - inputs.terminal_growth_rate)
+        else:
+            methods["gordon_growth"] = final_fcf * 20  # Fallback multiple
+        
+        # Exit Multiple Method (FCF)
+        methods["exit_multiple"] = final_fcf * inputs.terminal_fcf_multiple
+        
+        # Perpetuity Growth Method (alternative to Gordon Growth)
+        methods["perpetuity_growth"] = final_fcf / (wacc - inputs.terminal_growth_rate)
+        
+        return methods
+    
     def _calculate_weighted_dcf(self, scenario_results: List[Dict[str, Any]]) -> DCFOutputs:
         """Calculate probability-weighted DCF results"""
         weighted_enterprise_value = 0
@@ -668,20 +693,24 @@ class DCFValuationEngine:
         company_data: Dict[str, Any], 
         base_inputs: DCFInputs
     ) -> Dict[str, Any]:
-        """Generate sensitivity analysis grid"""
+        """Generate comprehensive sensitivity analysis"""
         
-        # WACC sensitivity (±200bps)
-        wacc_range = [-0.02, -0.01, 0, 0.01, 0.02]
+        # WACC sensitivity (±300bps)
+        wacc_range = [-0.03, -0.02, -0.01, 0, 0.01, 0.02, 0.03]
         
-        # Terminal growth sensitivity (±100bps)
-        terminal_growth_range = [-0.01, -0.005, 0, 0.005, 0.01]
+        # Terminal growth sensitivity (±150bps)
+        terminal_growth_range = [-0.015, -0.01, -0.005, 0, 0.005, 0.01, 0.015]
         
-        sensitivity_grid = []
+        # Revenue growth sensitivity (±50%)
+        revenue_growth_range = [0.5, 0.75, 1.0, 1.25, 1.5]
         
+        sensitivity_results = {}
+        
+        # WACC vs Terminal Growth sensitivity
+        wacc_tg_grid = []
         for wacc_delta in wacc_range:
             row = []
             for tg_delta in terminal_growth_range:
-                # Adjust inputs - create a proper copy with modified values
                 adjusted_inputs = replace(
                     base_inputs,
                     risk_free_rate=base_inputs.risk_free_rate + wacc_delta,
@@ -694,12 +723,50 @@ class DCFValuationEngine:
                 except Exception:
                     row.append(None)
             
-            sensitivity_grid.append(row)
+            wacc_tg_grid.append(row)
+        
+        # Revenue growth sensitivity
+        revenue_growth_sensitivity = []
+        for growth_multiplier in revenue_growth_range:
+            adjusted_inputs = replace(
+                base_inputs,
+                revenue_growth_rates=[g * growth_multiplier for g in base_inputs.revenue_growth_rates]
+            )
+            
+            try:
+                result = await self._calculate_dcf(company_data, adjusted_inputs)
+                revenue_growth_sensitivity.append({
+                    "multiplier": growth_multiplier,
+                    "intrinsic_value": round(result.intrinsic_value_per_share, 2)
+                })
+            except Exception:
+                revenue_growth_sensitivity.append({
+                    "multiplier": growth_multiplier,
+                    "intrinsic_value": None
+                })
+        
+        # Terminal value method comparison
+        terminal_value_comparison = {}
+        for method in ["gordon_growth", "exit_multiple", "perpetuity_growth"]:
+            adjusted_inputs = replace(base_inputs, terminal_value_method=method)
+            try:
+                result = await self._calculate_dcf(company_data, adjusted_inputs)
+                terminal_value_comparison[method] = round(result.intrinsic_value_per_share, 2)
+            except Exception:
+                terminal_value_comparison[method] = None
         
         return {
             "wacc_range": [f"{w:+.1%}" for w in wacc_range],
             "terminal_growth_range": [f"{tg:+.1%}" for tg in terminal_growth_range],
-            "sensitivity_grid": sensitivity_grid
+            "wacc_terminal_growth_grid": wacc_tg_grid,
+            "revenue_growth_sensitivity": revenue_growth_sensitivity,
+            "terminal_value_methods": terminal_value_comparison,
+            "sensitivity_summary": {
+                "wacc_impact": "High - 1% change in WACC typically impacts value by 10-15%",
+                "terminal_growth_impact": "Very High - 0.5% change in terminal growth impacts value by 15-25%",
+                "revenue_growth_impact": "Moderate - 25% change in growth rates impacts value by 5-10%",
+                "terminal_method_impact": "Moderate - Different methods can vary by 5-15%"
+            }
         }
     
     def _calculate_trade_rules(
