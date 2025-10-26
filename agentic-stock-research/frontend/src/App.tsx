@@ -52,6 +52,7 @@ function AppContent({ chatOpen, currentView }: AppProps) {
   const [bulkLoading, setBulkLoading] = useState(false)
   const [rankedStocks, setRankedStocks] = useState<any[]>([])
   const [bulkMode, setBulkMode] = useState<'buy' | 'sell'>('buy')
+  const [totalStocks, setTotalStocks] = useState(0)
   
   const toast = useToastHelpers()
   const countriesFetched = useRef(false)
@@ -347,12 +348,13 @@ function AppContent({ chatOpen, currentView }: AppProps) {
     }
   }
 
-  // Bulk analysis function with improved rate limiting
+  // Bulk analysis function with improved rate limiting and progressive display
   const handleBulkAnalyze = async (tickerList: string[], mode: 'buy' | 'sell') => {
     console.log('Starting bulk analysis:', { tickerList, mode })
     setBulkLoading(true)
     setBulkMode(mode)
     setRankedStocks([])
+    setTotalStocks(tickerList.length)  // Set total stocks count
     
     try {
       toast.info(`Analyzing ${tickerList.length} stocks...`, 'Bulk Analysis Started')
@@ -361,12 +363,13 @@ function AppContent({ chatOpen, currentView }: AppProps) {
       const batchSize = 3  // Reduced batch size
       const delayBetweenBatches = 2000  // 2 second delay between batches
       const results: any[] = []
+      let completedCount = 0
       
       for (let i = 0; i < tickerList.length; i += batchSize) {
         const batch = tickerList.slice(i, i + batchSize)
         console.log(`Processing batch ${Math.floor(i/batchSize) + 1}:`, batch)
         
-        // Analyze batch with individual delays
+        // Analyze batch with individual delays and progressive display
         const batchPromises = batch.map(async (ticker, index) => {
           try {
             // Add delay between individual requests within batch
@@ -433,16 +436,42 @@ function AppContent({ chatOpen, currentView }: AppProps) {
           }
         })
         
-        const batchResults = await Promise.all(batchPromises)
-        const validResults = batchResults.filter(r => r !== null)
-        console.log(`Batch complete. Valid results:`, validResults)
-        results.push(...validResults)
+        // Process batch results and display progressively
+        for (const result of await Promise.all(batchPromises)) {
+          if (result) {
+            results.push(result)
+            completedCount++
+            
+            // Sort results as they come in
+            const sorted = [...results].sort((a, b) => {
+              const getRecommendationStrength = (rec: string) => {
+                const strengthMap: { [key: string]: number } = {
+                  'Strong Buy': 7, 'Buy': 6, 'Hold': 5, 'Weak Hold': 4,
+                  'Weak Sell': 3, 'Sell': 2, 'Strong Sell': 1
+                }
+                return strengthMap[rec] || 0
+              }
+              
+              const aStrength = getRecommendationStrength(a.recommendation)
+              const bStrength = getRecommendationStrength(b.recommendation)
+              
+              if (aStrength !== bStrength) {
+                return bStrength - aStrength
+              }
+              return b.confidenceScore - a.confidenceScore
+            })
+            
+            // Update UI with current results
+            setRankedStocks(sorted)
+            toast.info(
+              `✓ ${completedCount}/${tickerList.length} stocks analyzed - ${result.ticker} complete`,
+              'Progress',
+              { duration: 2000 }
+            )
+          }
+        }
         
-        // Update progress
-        toast.info(
-          `Analyzed ${Math.min(i + batchSize, tickerList.length)} of ${tickerList.length} stocks`,
-          'Progress'
-        )
+        console.log(`Batch complete. Total completed: ${completedCount}/${tickerList.length}`)
         
         // Add delay between batches to respect rate limits
         if (i + batchSize < tickerList.length) {
@@ -452,7 +481,7 @@ function AppContent({ chatOpen, currentView }: AppProps) {
       
       console.log('All batches complete. Total results:', results.length)
       
-      // Sort by recommendation strength first, then by confidence score
+      // Final sort of all results
       const sorted = results.sort((a, b) => {
         // Define recommendation strength order for buy opportunities
         const getRecommendationStrength = (rec: string) => {
@@ -656,6 +685,36 @@ function AppContent({ chatOpen, currentView }: AppProps) {
                     onAnalyze={handleBulkAnalyze}
                     loading={bulkLoading}
                   />
+                  
+                  {/* Progress Status Bar */}
+                  {bulkLoading && rankedStocks.length > 0 && totalStocks > 0 && (
+                    <div className="card p-4 mb-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
+                            <span className="text-white font-bold text-sm">
+                              {rankedStocks.length}
+                            </span>
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100">
+                              Analysis in Progress
+                            </h3>
+                            <p className="text-xs text-blue-700 dark:text-blue-300">
+                              {rankedStocks.length}/{totalStocks} stock(s) analyzed
+                            </p>
+                          </div>
+                        </div>
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                      </div>
+                      <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${(rankedStocks.length / totalStocks) * 100}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
                   
                   {rankedStocks.length > 0 && (
                     <RankedStockList

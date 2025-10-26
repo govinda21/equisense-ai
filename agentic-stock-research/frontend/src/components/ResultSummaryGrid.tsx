@@ -1,3 +1,4 @@
+import React from 'react'
 import { Icons } from './icons'
 import { TechnicalChart } from './TechnicalChart'
 
@@ -302,70 +303,123 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           )}
       </div>
 
-        {/* Key Metrics Grid - Mobile Responsive */}
-        <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
-          {/* 1. CMP (Current Market Price) */}
-          {report?.analyst_recommendations?.details?.current_price && (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
-              <div className="text-xs text-gray-600 uppercase font-medium mb-1">CMP</div>
-              <div className="text-xl font-bold text-gray-900">
-                {formatAmountByCurrency(report.analyst_recommendations.details.current_price, ticker)}
-              </div>
-            </div>
-          )}
-
-          {/* 2. Price Target */}
-          {report?.decision?.price_target_12m && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
-              <div className="text-xs text-green-600 uppercase font-medium mb-1">Price Target</div>
-              <div className="text-xl font-bold text-green-900">
-                {formatAmountByCurrency(report.decision.price_target_12m, ticker)}
-              </div>
-              <div className="text-xs text-green-600">{report.decision.price_target_source}</div>
-      </div>
-          )}
+        {/* Investment Recommendation - Enterprise Layout */}
+        <div className="card p-6 shadow-lg">
+          <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-2">
+            <span className="w-5 h-5 inline-block">🎯</span>
+            Investment Recommendation
+          </h3>
           
-          {/* 3. Expected Return */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
-            <div className="text-xs text-blue-600 uppercase font-medium mb-1">Expected Return</div>
-            <div className={`text-xl font-bold ${
-              (report.decision.expected_return_pct || 0) > 0 ? 'text-green-600' : 'text-red-600'
-            }`}>
-              {report.decision.expected_return_pct > 0 ? '+' : ''}{report.decision.expected_return_pct?.toFixed(1) || '0'}%
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* 1. Current Market Price */}
+            {report?.analyst_recommendations?.details?.current_price && (
+              <div className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
+                <div className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide mb-2">Current Price</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-50 font-mono">
+                  {formatAmountByCurrency(report.analyst_recommendations.details.current_price, ticker)}
+                </div>
+              </div>
+            )}
+
+            {/* 2. Price Target */}
+            {report?.decision?.price_target_12m && (
+              <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/30 dark:to-emerald-900/30 border-2 border-green-300 dark:border-green-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
+                <div className="text-xs font-semibold text-green-700 dark:text-green-400 uppercase tracking-wide mb-2">Price Target</div>
+                <div className="text-2xl font-bold text-green-900 dark:text-green-100 font-mono mb-1">
+                  {formatAmountByCurrency(report.decision.price_target_12m, ticker)}
+                </div>
+                <div className="text-xs text-green-600 dark:text-green-400 font-medium">{report.decision.price_target_source}</div>
+              </div>
+            )}
+            
+            {/* 3. Expected Return */}
+            <div className="bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/30 dark:to-cyan-900/30 border-2 border-blue-300 dark:border-blue-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
+              <div className="text-xs font-semibold text-blue-700 dark:text-blue-400 uppercase tracking-wide mb-2">Expected Return</div>
+              <div className={`text-2xl font-bold font-mono ${
+                (report.decision.expected_return_pct || 0) > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+              }`}>
+                {report.decision.expected_return_pct > 0 ? '+' : ''}{report.decision.expected_return_pct?.toFixed(1) || '0.0'}%
+              </div>
+              <div className="text-xs text-slate-600 dark:text-slate-400 mt-1">12-month forecast</div>
+            </div>
+
+            {/* 4. DCF Summary */}
+            <div className="bg-gradient-to-br from-purple-50 to-violet-50 dark:from-purple-900/30 dark:to-violet-900/30 border-2 border-purple-300 dark:border-purple-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
+              <div className="text-xs font-semibold text-purple-700 dark:text-purple-400 uppercase tracking-wide mb-2">DCF Valuation</div>
+              {dcfValuation?.dcf_applicable === false ? (
+                <div>
+                  <div className="text-sm text-amber-600 dark:text-amber-400 font-medium mb-1">⚠️ Not Applicable</div>
+                  <div className="text-xs text-slate-600 dark:text-slate-400">{dcfValuation.reason}</div>
+                </div>
+              ) : dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 ? (
+                <div>
+                  {/* Show base scenario value */}
+                  {(() => {
+                    const baseScenario = dcfValuation.scenario_results.find((s: any) => s.scenario === 'Base');
+                    return baseScenario ? (
+                      <>
+                        <div className="text-lg font-bold text-purple-900 dark:text-purple-100 font-mono mb-1">
+                          {formatAmountByCurrency(baseScenario.result.intrinsic_value_per_share, ticker)}
+                        </div>
+                        <div className="text-xs text-slate-600 dark:text-slate-400">Base case scenario</div>
+                      </>
+                    ) : (
+                      <div className="text-sm text-slate-500 dark:text-slate-400">Available</div>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-500 dark:text-slate-400">Not available</div>
+              )}
             </div>
           </div>
 
-          {/* 4. DCF Scenarios */}
-          <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-            <div className="text-xs text-purple-600 uppercase font-medium mb-2 text-center">DCF Scenarios</div>
-            {dcfValuation?.dcf_applicable === false ? (
-              <div className="text-center">
-                <div className="text-sm text-orange-600 font-medium mb-2">⚠️ DCF Not Applicable</div>
-                <div className="text-xs text-gray-600 mb-2">{dcfValuation.reason}</div>
-                <div className="text-xs text-gray-500">{dcfValuation.valuation_method}</div>
+          {/* DCF Warnings (if any) - Below the cards */}
+          {dcfValuation?.sanity_check?.warnings?.length > 0 && (
+            <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
+              <div className="text-sm font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-2">
+                <span className="w-4 h-4 inline-block">⚠️</span>
+                Valuation Model Warnings
               </div>
-            ) : dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 ? (
-              <div className="space-y-1">
-                {dcfValuation.scenario_results.map((scenario: any, index: number) => (
-                  <div key={index} className="flex justify-between items-center text-sm">
-                    <span className={`font-medium ${
-                      scenario.scenario === 'Bull' ? 'text-green-700' : 
-                      scenario.scenario === 'Base' ? 'text-blue-700' : 'text-red-700'
-                    }`}>
-                      {scenario.scenario} ({(scenario.probability * 100).toFixed(0)}%)
-                    </span>
-                    <span className="font-bold text-purple-900">
-                      {formatAmountByCurrency(scenario.result.intrinsic_value_per_share, ticker)}
-                    </span>
+              <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                {dcfValuation.sanity_check.warnings.map((warning: string, i: number) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="text-amber-600 dark:text-amber-400">•</span>
+                    <span>{warning}</span>
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="text-sm text-gray-500 text-center">DCF scenarios not available</div>
-            )}
-          </div>
-
+            </div>
+          )}
         </div>
+
+        {/* Detailed DCF Scenarios - Separate Section */}
+        {dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 && (
+          <div className="card p-6">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">DCF Scenario Analysis</h3>
+            <div className="space-y-3">
+              {dcfValuation.scenario_results.map((scenario: any, index: number) => (
+                <div key={index} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-12 text-center font-bold text-sm rounded px-2 py-1 ${
+                      scenario.scenario === 'Bull' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' : 
+                      scenario.scenario === 'Base' ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200' : 
+                      'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
+                    }`}>
+                      {scenario.scenario}
+                    </span>
+                    <span className="text-sm text-slate-600 dark:text-slate-400">
+                      {(scenario.probability * 100).toFixed(0)}% probability
+                    </span>
+                  </div>
+                  <span className="font-mono font-bold text-lg text-slate-900 dark:text-slate-100">
+                    {formatAmountByCurrency(scenario.result.intrinsic_value_per_share, ticker)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Investment Thesis - Mobile Responsive */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 mb-4 sm:mb-6">
@@ -422,7 +476,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               </ul>
             </div>
           )}
-        </div>
+            </div>
 
         {/* Outlook Section */}
         <div className="grid md:grid-cols-2 gap-4">
@@ -432,7 +486,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               <p className="text-sm text-blue-800 leading-relaxed">
                 {report.decision.short_term_outlook}
               </p>
-            </div>
+          </div>
           )}
           
           {report?.decision?.long_term_outlook && (
@@ -441,8 +495,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               <p className="text-sm text-purple-800 leading-relaxed">
                 {report.decision.long_term_outlook}
               </p>
-            </div>
-          )}
+        </div>
+      )}
         </div>
       </div>
 
@@ -516,9 +570,9 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                     {risk}
             </div>
                 ))}
-              </div>
+          </div>
             </div>
-            <div>
+                <div>
               <div className="text-sm font-semibold text-slate-900 mb-3">Key Catalysts</div>
               <div className="space-y-2">
                 {comp.key_catalysts?.slice(0, 3).map((catalyst: string, idx: number) => (
@@ -529,9 +583,9 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                 ))}
               </div>
             </div>
-          </div>
-        </div>
-      )}
+                  </div>
+                </div>
+              )}
 
       {/* DEEP FINANCIAL ANALYSIS - Full Width */}
       {deepFinancialAnalysis && deepFinancialAnalysis.ticker && (
@@ -586,8 +640,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                     </span>
                   </div>
                   </div>
-                </div>
-              )}
+            </div>
+          )}
 
             {/* Growth Analysis */}
             {deepFinancialAnalysis?.growth_metrics?.revenue_growth && (
@@ -607,8 +661,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                     <span className="font-medium">{(deepFinancialAnalysis.growth_metrics.revenue_growth.cagr_5y * 100).toFixed(1)}%</span>
                   </div>
                 </div>
-            </div>
-          )}
+        </div>
+      )}
           </div>
 
           {/* Key Financial Ratios */}
@@ -620,17 +674,17 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                   <div key={ratio} className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
                     <div className="text-xs text-slate-500 uppercase font-medium mb-1">
                       {ratio.replace(/_/g, ' ')}
-                    </div>
+          </div>
                     <div className="text-lg font-bold text-slate-900">
                       {data.latest ? (ratio.includes('margin') || ratio.includes('ratio') ? (data.latest * 100).toFixed(1) + '%' : data.latest.toFixed(2)) : '—'}
-                    </div>
+            </div>
                     <div className="text-xs text-slate-600">
                       {data.trend || 'N/A'}
-                    </div>
-                  </div>
+            </div>
+            </div>
                 ))}
-              </div>
-        </div>
+            </div>
+                </div>
       )}
 
           {/* Enhanced Earnings Quality & Balance Sheet Forensics */}
@@ -653,7 +707,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                       <div className="flex justify-between items-center">
                         <span className="text-blue-700">Score:</span>
                         <span className="font-bold text-lg">{deepFinancialAnalysis.earnings_quality.overall_quality_score.score?.toFixed(1) || 'N/A'}/100</span>
-          </div>
+                </div>
                       <div className="flex justify-between items-center">
                         <span className="text-blue-700">Grade:</span>
                         <span className={`font-bold text-lg px-2 py-1 rounded ${
@@ -664,8 +718,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                         }`}>
                           {deepFinancialAnalysis.earnings_quality.overall_quality_score.grade}
                         </span>
-            </div>
-            </div>
+                </div>
+                </div>
             </div>
                 )}
                 
@@ -679,7 +733,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                       <div className="flex justify-between items-center">
                         <span className="text-green-700">Score:</span>
                         <span className="font-bold text-lg">{deepFinancialAnalysis.balance_sheet_strength.overall_strength_score.score?.toFixed(1) || 'N/A'}/100</span>
-            </div>
+          </div>
                       <div className="flex justify-between items-center">
                         <span className="text-green-700">Grade:</span>
                         <span className={`font-bold text-lg px-2 py-1 rounded ${
@@ -690,7 +744,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
                         }`}>
                           {deepFinancialAnalysis.balance_sheet_strength.overall_strength_score.grade}
                         </span>
-                </div>
+              </div>
                       <div className="flex justify-between items-center">
                         <span className="text-green-700">Strength:</span>
                         <span className={`font-medium px-2 py-1 rounded text-sm ${

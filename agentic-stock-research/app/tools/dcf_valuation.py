@@ -377,6 +377,11 @@ class DCFValuationEngine:
             # Generate sensitivity analysis
             sensitivity = await self._sensitivity_analysis(company_data, scenarios[0].inputs)
             
+            # Run sanity check on weighted result
+            info = company_data.get("info", {})
+            current_price = info.get("currentPrice") or info.get("regularMarketPrice") or current_price or 0
+            sanity_result = self._sanity_check_dcf_result(weighted_result, current_price, info)
+            
             # Calculate margin of safety and trade rules
             trade_rules = self._calculate_trade_rules(weighted_result, current_price)
             
@@ -397,6 +402,7 @@ class DCFValuationEngine:
                 "stop_loss": trade_rules["stop_loss"],
                 "scenario_results": scenario_results,
                 "sensitivity_analysis": sensitivity,
+                "sanity_check": sanity_result,  # Add sanity check results
                 "key_assumptions": {
                     "wacc": weighted_result.wacc,
                     "terminal_growth": scenarios[0].inputs.terminal_growth_rate,
@@ -821,7 +827,8 @@ class DCFValuationEngine:
         elif intrinsic_value_per_share > 1e6:
             logger.warning(f"DCF: Unreasonably high intrinsic value ({intrinsic_value_per_share:.2f}), check inputs")
         
-        return DCFOutputs(
+        # Create DCF outputs
+        dcf_output = DCFOutputs(
             enterprise_value=enterprise_value,
             equity_value=equity_value,
             intrinsic_value_per_share=intrinsic_value_per_share,
@@ -835,6 +842,73 @@ class DCFValuationEngine:
             margin_of_safety=0.0,  # Will be calculated later
             upside_potential=0.0   # Will be calculated later
         )
+        
+        # Run sanity check on the result
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+        sanity_result = self._sanity_check_dcf_result(dcf_output, current_price, info)
+        
+        # Log warnings if any
+        if sanity_result["warnings"]:
+            for warning in sanity_result["warnings"]:
+                logger.warning(f"DCF Sanity Check: {warning}")
+        
+        return dcf_output
+    
+    def _sanity_check_dcf_result(
+        self, 
+        result: DCFOutputs, 
+        current_price: float, 
+        info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Sanity check DCF result for reasonable ranges
+        
+        Returns:
+            Dict with 'is_reasonable', 'warnings', and 'confidence' keys
+        """
+        warnings = []
+        
+        # Check 1: Intrinsic value vs current price
+        if current_price and current_price > 0:
+            ratio = result.intrinsic_value_per_share / current_price
+            
+            if ratio < 0.3:
+                warnings.append(f"Intrinsic value ratio: {ratio:.2f}x (very undervalued - value trap concern)")
+            elif ratio > 3.0:
+                warnings.append(f"Intrinsic value ratio: {ratio:.2f}x (very overvalued - check model assumptions)")
+        
+        # Check 2: Negative values
+        if result.equity_value < 0:
+            warnings.append(f"Negative equity value: ${result.equity_value:,.0f}")
+        
+        if result.intrinsic_value_per_share < 0:
+            warnings.append(f"Negative intrinsic value per share: ${result.intrinsic_value_per_share:.2f}")
+        
+        # Check 3: WACC in reasonable range
+        if result.wacc < 0.04:
+            warnings.append(f"Very low WACC: {result.wacc:.2%} (expected 4-15%)")
+        elif result.wacc > 0.15:
+            warnings.append(f"Very high WACC: {result.wacc:.2%} (expected 4-15%)")
+        
+        # Check 4: Terminal value proportion
+        total_value = result.pv_explicit_period + result.pv_terminal_value
+        if total_value > 0:
+            terminal_pct = result.pv_terminal_value / total_value
+            
+            if terminal_pct < 0.3:
+                warnings.append(f"Terminal value only {terminal_pct:.1%} of total (explicit period dominates)")
+            elif terminal_pct > 0.9:
+                warnings.append(f"Terminal value is {terminal_pct:.1%} of total (terminal assumptions dominate)")
+        
+        # Check 5: Unusual net debt
+        if result.net_debt < -1e9:  # More than -$1B cash
+            warnings.append(f"Very high cash position: ${-result.net_debt/1e9:.1f}B (may indicate mismanagement)")
+        
+        return {
+            "is_reasonable": len(warnings) == 0,
+            "warnings": warnings,
+            "confidence": "high" if len(warnings) == 0 else "moderate" if len(warnings) <= 2 else "low"
+        }
     
     def _calculate_terminal_value_methods(
         self, 
@@ -863,6 +937,72 @@ class DCFValuationEngine:
             methods["perpetuity_growth"] = final_fcf * 20  # Fallback
         
         return methods
+    
+    def _calculate_dcf_sensitivity(
+        self,
+        base_fcf: float,
+        inputs: DCFInputs,
+        wacc_base: float,
+        terminal_growth_base: float
+    ) -> Dict[str, Any]:
+        """
+        Calculate sensitivity analysis for key DCF inputs
+        
+        Tests sensitivity to:
+        - WACC changes (±1%)
+        - Terminal growth (±0.5%)
+        - Revenue growth (±25%)
+        
+        Returns dictionary with sensitivity data
+        """
+        sensitivities = {}
+        
+        # WACC sensitivity (±1%)
+        for wacc_delta in [-0.01, 0, 0.01]:
+            wacc = max(0.04, min(0.25, wacc_base + wacc_delta))  # Keep in reasonable range
+            sensitivity_key = f"wacc_{wacc_delta:+.0%}".replace("+", "plus").replace("-", "minus")
+            
+            try:
+                # Recalculate DCF with modified WACC
+                terminal_methods = self._calculate_terminal_value_methods(base_fcf, inputs, wacc)
+                terminal_value = terminal_methods.get(inputs.terminal_value_method, base_fcf * 15)
+                
+                # Simplified PV calculation for sensitivity
+                discount_factors = [(1 + wacc) ** -i for i in range(1, 11)]
+                pv_explicit = sum(base_fcf * df for df in discount_factors)
+                pv_terminal = terminal_value * discount_factors[-1]
+                
+                sensitivities[sensitivity_key] = {
+                    "wacc": wacc,
+                    "terminal_value_pv": pv_terminal,
+                    "enterprise_value": pv_explicit + pv_terminal
+                }
+            except Exception as e:
+                logger.warning(f"Sensitivity calculation failed for WACC {wacc:.2%}: {e}")
+        
+        # Terminal growth sensitivity (±0.5%)
+        for tg_delta in [-0.005, 0, 0.005]:
+            tg = max(0.01, min(0.10, terminal_growth_base + tg_delta))  # Keep in reasonable range
+            sensitivity_key = f"terminal_growth_{tg_delta:+.1%}".replace("+", "plus").replace("-", "minus").replace("%", "pct")
+            
+            try:
+                # Create modified inputs with new terminal growth
+                modified_inputs = replace(inputs, terminal_growth_rate=tg)
+                
+                terminal_methods = self._calculate_terminal_value_methods(base_fcf, modified_inputs, wacc_base)
+                terminal_value = terminal_methods.get(inputs.terminal_value_method, base_fcf * 15)
+                
+                discount_factors = [(1 + wacc_base) ** -i for i in range(1, 11)]
+                pv_terminal = terminal_value * discount_factors[-1]
+                
+                sensitivities[sensitivity_key] = {
+                    "terminal_growth": tg,
+                    "terminal_value_pv": pv_terminal
+                }
+            except Exception as e:
+                logger.warning(f"Sensitivity calculation failed for terminal growth {tg:.2%}: {e}")
+        
+        return sensitivities
     
     def _calculate_weighted_dcf(self, scenario_results: List[Dict[str, Any]]) -> DCFOutputs:
         """Calculate probability-weighted DCF results"""

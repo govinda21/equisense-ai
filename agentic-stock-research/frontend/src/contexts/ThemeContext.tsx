@@ -10,29 +10,35 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('light')
-  
-  useEffect(() => {
+  const [theme, setTheme] = useState<Theme>(() => {
     // Check localStorage for saved theme preference
     const savedTheme = localStorage.getItem('theme') as Theme
-    if (savedTheme) {
-      setTheme(savedTheme)
-      document.documentElement.classList.add(savedTheme)
+    if (savedTheme) return savedTheme
+    
+    // Respect system preference on first load if no saved theme
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return 'dark'
+    }
+    return 'light'
+  })
+  
+  useEffect(() => {
+    // Update theme class on document root (for Tailwind)
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
     }
     
-    // Update theme class on document root
-    document.documentElement.classList.remove('light', 'dark')
-    document.documentElement.classList.add(theme)
+    // Also set root attribute for CSS variables
+    document.documentElement.setAttribute('data-theme', theme)
+    document.documentElement.setAttribute('aria-theme', theme)
   }, [theme])
   
   const toggleTheme = () => {
     const newTheme = theme === 'light' ? 'dark' : 'light'
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
-    
-    // Update DOM class
-    document.documentElement.classList.remove('light', 'dark')
-    document.documentElement.classList.add(newTheme)
   }
   
   return (

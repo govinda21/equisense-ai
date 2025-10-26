@@ -1,7 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
-/* App scopes */
-html, body, #root { height: 100%; }
+/* ============================================
+   THEME TOKENS - Centralized
+   ============================================ */
+
+:root {
+  /* Text Colors - Light Mode */
+  --text-primary: #0f172a;   /* slate-950 */
+  --text-muted: #64748b;     /* slate-500 */
+  
+  /* Background Colors - Light Mode */
+  --bg-primary: #ffffff;
+  --card-bg: #ffffff;
+  
+  /* Accent Color */
+  --accent: #0ea5e9;
+}
+
+:root.dark {
+  /* Text Colors - Dark Mode */
+  --text-primary: #f8fafc;   /* slate-50 */
+  --text-muted: #94a3b8;     /* slate-400 */
+  
+  /* Background Colors - Dark Mode */
+  --bg-primary: #0f172a;
+  --card-bg: #1e293b;
+  
+  /* Accent Color */
+  --accent: #38bdf8;
+}
+
+/* ============================================
+   TYPOGRAPHY SYSTEM
+   ============================================ */
+
+/* Font Families */
+.font-mono { font-family: 'JetBrains Mono', 'Consolas', 'Monaco', monospace; }
+
+/* ============================================
+   SEMANTIC UTILITY CLASSES
+   ============================================ */
+
+/* Text Color Utilities - Use these in components */
+.text-primary { color: var(--text-primary); }
+.text-muted { color: var(--text-muted); }
+
+/* Background Utilities */
+.card-bg { background-color: var(--card-bg); }
+
+/* ============================================
+   APP SCOPES
+   ============================================ */
+
+html, body, #root { 
+  height: 100%; 
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
 body { @apply bg-slate-50 text-slate-900; }
 .container { @apply mx-auto max-w-6xl px-4; }
 .card { @apply bg-white rounded-xl shadow-sm ring-1 ring-slate-200; }

@@ -114,12 +114,12 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
     return Array.from(uniqueSectors) as string[]
   }, [stocks])
 
-  // Confidence color coding
+  // Confidence color coding (WCAG AA compliant contrast)
   const getConfidenceColor = (score: number) => {
-    if (score >= 80) return 'text-green-600 bg-green-50 border-green-200'
-    if (score >= 60) return 'text-blue-600 bg-blue-50 border-blue-200'
-    if (score >= 40) return 'text-yellow-600 bg-yellow-50 border-yellow-200'
-    return 'text-red-600 bg-red-50 border-red-200'
+    if (score >= 80) return 'text-green-800 bg-green-100 border-green-300 dark:text-green-100 dark:bg-green-900 dark:border-green-700'
+    if (score >= 60) return 'text-blue-800 bg-blue-100 border-blue-300 dark:text-blue-100 dark:bg-blue-900 dark:border-blue-700'
+    if (score >= 40) return 'text-yellow-800 bg-yellow-100 border-yellow-300 dark:text-yellow-100 dark:bg-yellow-900 dark:border-yellow-700'
+    return 'text-red-800 bg-red-100 border-red-300 dark:text-red-100 dark:bg-red-900 dark:border-red-700'
   }
 
   // Sentiment icon
@@ -145,10 +145,10 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
             Ranked {mode === 'buy' ? 'Buy' : 'Sell'} Opportunities
           </h2>
-          <p className="text-sm text-slate-600 mt-1">
+          <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
             {sortedStocks.length} stocks analyzed • Sorted by {sortField === 'confidence' ? 'recommendation strength' : sortField}
           </p>
         </div>
@@ -156,7 +156,7 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setExpandedTickers(new Set())}
-            className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50"
+            className="px-3 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
           >
             Collapse All
           </button>
@@ -168,11 +168,11 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Sort By */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Sort By</label>
+            <label className="block text-xs font-semibold text-slate-900 dark:text-slate-100 mb-1">Sort By</label>
             <select
               value={sortField}
               onChange={(e) => handleSort(e.target.value as SortField)}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium"
             >
               <option value="confidence">Recommendation Strength</option>
               <option value="price">Last Price</option>
@@ -184,10 +184,10 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
 
           {/* Direction */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Direction</label>
+            <label className="block text-xs font-semibold text-slate-900 dark:text-slate-100 mb-1">Direction</label>
             <button
               onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center justify-center"
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200 flex items-center justify-center font-medium"
             >
               {sortDirection === 'desc' ? '↓ High to Low' : '↑ Low to High'}
             </button>
@@ -195,11 +195,11 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
 
           {/* Sector Filter */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Sector</label>
+            <label className="block text-xs font-semibold text-slate-900 dark:text-slate-100 mb-1">Sector</label>
             <select
               value={sectorFilter}
               onChange={(e) => setSectorFilter(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-medium"
             >
               <option value="all">All Sectors</option>
               {sectors.map(sector => (
@@ -210,7 +210,7 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
 
           {/* Min Confidence */}
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
+            <label className="block text-xs font-semibold text-slate-900 dark:text-slate-100 mb-1">
               Min Confidence: {minConfidence}%
             </label>
             <input
@@ -226,22 +226,23 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
         </div>
       </div>
 
-      {/* Loading State */}
-      {loading && (
+      {/* Empty State (only show when loading and no results yet) */}
+      {loading && sortedStocks.length === 0 && (
         <div className="card p-8 text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-slate-600">Analyzing stocks...</p>
+          <p className="text-slate-600 dark:text-slate-400">Analyzing stocks...</p>
         </div>
       )}
 
-      {/* Stock List */}
+      {/* Empty State (when not loading but no results) */}
       {!loading && sortedStocks.length === 0 && (
         <div className="card p-8 text-center">
-          <p className="text-slate-600">No stocks match your filters</p>
+          <p className="text-slate-600 dark:text-slate-400">No stocks match your filters</p>
         </div>
       )}
 
-      {!loading && sortedStocks.map((stock, index) => {
+      {/* Stock List - Show even while loading if we have results */}
+      {sortedStocks.length > 0 && sortedStocks.map((stock, index) => {
         const isExpanded = expandedTickers.has(stock.ticker)
         const confidenceColorClass = getConfidenceColor(stock.confidenceScore)
         
@@ -249,22 +250,22 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
           <div key={stock.ticker} className="card overflow-hidden">
             {/* Compact View */}
             <div
-              className="p-4 cursor-pointer hover:bg-slate-50 transition-colors"
+              className="p-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
               onClick={() => toggleExpand(stock.ticker)}
             >
               <div className="flex items-center justify-between gap-4">
                 {/* Rank & Ticker */}
                 <div className="flex items-center space-x-4 min-w-0 flex-1">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-sm font-bold text-slate-700">
+                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-sm font-bold text-slate-700 dark:text-slate-200">
                     {index + 1}
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center space-x-2">
-                      <span className="text-lg font-bold text-slate-900">{stock.ticker}</span>
+                      <span className="text-lg font-bold text-slate-950 dark:text-slate-50">{stock.ticker}</span>
                       <span className="text-xl">{getSentimentIcon(stock.sentiment)}</span>
                     </div>
                     {stock.sector && (
-                      <span className="text-xs text-slate-500">{stock.sector}</span>
+                      <span className="text-sm text-slate-700 dark:text-slate-300">{stock.sector}</span>
                     )}
                   </div>
                 </div>
@@ -277,11 +278,11 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
 
                 {/* Price & Change */}
                 <div className="hidden sm:block flex-shrink-0 text-right">
-                  <div className="text-lg font-semibold text-slate-900">
+                  <div className="text-xl font-bold text-slate-950 dark:text-slate-50">
                     {stock.ticker.endsWith('.NS') || stock.ticker.endsWith('.BO') ? '₹' : '$'}
                     {stock.lastPrice.toLocaleString()}
                   </div>
-                  <div className={`text-sm font-medium ${stock.changePercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  <div className={`text-sm font-bold ${stock.changePercent >= 0 ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}`}>
                     {stock.changePercent >= 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%
                   </div>
                 </div>
@@ -290,9 +291,9 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
                 {stock.recommendation && (
                   <div className="hidden md:block flex-shrink-0">
                     <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                      stock.recommendation.includes('Buy') ? 'bg-green-100 text-green-800' :
-                      stock.recommendation.includes('Sell') ? 'bg-red-100 text-red-800' :
-                      'bg-blue-100 text-blue-800'
+                      stock.recommendation.includes('Buy') ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
+                      stock.recommendation.includes('Sell') ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' :
+                      'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
                     }`}>
                       {stock.recommendation}
                     </span>
@@ -301,26 +302,26 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
 
                 {/* Expand Icon */}
                 <div className="flex-shrink-0">
-                  <Icons.ChartBar className={`w-5 h-5 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                  <Icons.ChartBar className={`w-5 h-5 text-slate-400 dark:text-slate-500 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                 </div>
               </div>
 
               {/* Mobile Price & Change */}
               <div className="sm:hidden mt-3 flex items-center justify-between">
                 <div>
-                  <span className="text-lg font-semibold text-slate-900">
+                  <span className="text-xl font-bold text-slate-950 dark:text-slate-50">
                     {stock.ticker.endsWith('.NS') || stock.ticker.endsWith('.BO') ? '₹' : '$'}
                     {stock.lastPrice.toLocaleString()}
                   </span>
-                  <span className={`ml-2 text-sm font-medium ${stock.changePercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  <span className={`ml-2 text-sm font-bold ${stock.changePercent >= 0 ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}`}>
                     {stock.changePercent >= 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%
                   </span>
                 </div>
                 {stock.recommendation && (
                   <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                    stock.recommendation.includes('Buy') ? 'bg-green-100 text-green-800' :
-                    stock.recommendation.includes('Sell') ? 'bg-red-100 text-red-800' :
-                    'bg-blue-100 text-blue-800'
+                    stock.recommendation.includes('Buy') ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' :
+                    stock.recommendation.includes('Sell') ? 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200' :
+                    'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200'
                   }`}>
                     {stock.recommendation}
                   </span>
@@ -330,7 +331,7 @@ export function RankedStockList({ stocks, mode, loading }: RankedStockListProps)
 
             {/* Expanded Detail View */}
             {isExpanded && stock.report && (
-              <div className="border-t border-slate-200 bg-slate-50 p-6">
+              <div className="border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-6">
                 <ResultSummaryGrid report={stock.report} />
               </div>
             )}
