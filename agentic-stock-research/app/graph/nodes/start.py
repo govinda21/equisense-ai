@@ -18,7 +18,7 @@ async def start_node(state: ResearchState, settings: AppSettings) -> ResearchSta
         tickers = []
     
     # Preserve country from input state
-    country = state.get("country", "India")  # Default to India
+    country = state.get("country", "United States")  # Default to United States
     
     return ResearchState(
         tickers=tickers,

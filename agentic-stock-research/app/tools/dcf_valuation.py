@@ -195,6 +195,112 @@ class DCFValuationEngine:
                 return SECTOR_TERMINAL_GROWTH[key]
         
         return SECTOR_TERMINAL_GROWTH["default"]
+    
+    def _validate_dcf_applicability(self, company_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate if DCF is applicable for this company
+        
+        Returns validation result with applicability flag and alternate methods
+        """
+        try:
+            logger.info(f"🔍 DCF: Starting _validate_dcf_applicability")
+            info = company_data["info"]
+            logger.info(f"🔍 DCF: Company info keys: {list(info.keys())}")
+            
+            # Extract key financial metrics
+            ebitda = info.get("ebitda")
+            net_income = info.get("netIncome") or info.get("netIncomeCommonStockholders") or info.get("netIncomeToCommon")
+            free_cash_flow = info.get("freeCashflow")
+            operating_cash_flow = info.get("operatingCashflow") or info.get("totalCashFromOperatingActivities")
+            revenue = info.get("totalRevenue") or info.get("revenue")
+            current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            market_cap = info.get("marketCap")
+            
+            # Calculate revenue growth if available
+            revenue_growth = info.get("revenueGrowth")
+            if revenue_growth is None and revenue and market_cap:
+                # Estimate revenue growth from P/S ratio trends (simplified)
+                ps_ratio = info.get("priceToSalesTrailing12Months", 0)
+                if ps_ratio > 0:
+                    revenue_growth = 0.15  # Default 15% for growth companies
+            
+            # Calculate P/S ratio
+            price_to_sales = None
+            if revenue and current_price and market_cap:
+                shares_outstanding = market_cap / current_price if current_price > 0 else None
+                if shares_outstanding:
+                    price_to_sales = market_cap / revenue
+            
+            # Improved DCF Applicability Logic - Multi-factor validation
+            reason_parts = []
+            
+            # Calculate FCF margin if data is available
+            fcf_margin = 0
+            if (free_cash_flow is not None and revenue is not None and 
+                free_cash_flow > 0 and revenue > 0):
+                fcf_margin = free_cash_flow / revenue
+            
+            # Handle missing data case
+            if (free_cash_flow is None and operating_cash_flow is None and 
+                ebitda is None and net_income is None):
+                reason_parts.append("insufficient financial data")
+                dcf_applicable = False
+            else:
+                # Multi-factor DCF applicability check
+                net_income_val = net_income if net_income is not None else 0
+                operating_cf_val = operating_cash_flow if operating_cash_flow is not None else 0
+                
+                # Only exclude DCF when both Operating Cash Flow and Net Income are negative
+                if net_income_val < 0 and operating_cf_val < 0:
+                    dcf_applicable = False
+                    reason_parts.append("negative net income and operating cash flow")
+                # Or if FCF margin is very low AND net income is negative
+                elif fcf_margin < 0.005 and net_income_val < 0:  # 0.5% threshold
+                    dcf_applicable = False
+                    reason_parts.append(f"very low free cash flow margin ({fcf_margin:.1%}) with negative net income")
+                else:
+                    dcf_applicable = True
+                
+                # Log the DCF applicability decision
+                logger.info(f"DCF Applicability Check → Net Income: {net_income_val}, OCF: {operating_cf_val}, FCF Margin: {fcf_margin:.1%}, Applicable: {dcf_applicable}")
+            
+            if not dcf_applicable:
+                reason = f"DCF model not applicable ({', '.join(reason_parts)})"
+                valuation_method = "Revenue multiples or growth-based metrics suggested"
+                
+                suggested_metrics = {
+                    "revenue": revenue,
+                    "revenue_growth_yoy": revenue_growth,
+                    "price_to_sales_ratio": price_to_sales,
+                    "market_cap": market_cap,
+                    "current_price": current_price,
+                    "ebitda": ebitda,
+                    "net_income": net_income,
+                    "operating_cash_flow": operating_cash_flow
+                }
+                
+                return {
+                    "dcf_applicable": False,
+                    "reason": reason,
+                    "valuation_method": valuation_method,
+                    "suggested_metrics": suggested_metrics
+                }
+            else:
+                return {
+                    "dcf_applicable": True,
+                    "reason": "Company has positive cash flows and earnings",
+                    "valuation_method": "DCF model applicable",
+                    "suggested_metrics": {}
+                }
+                
+        except Exception as e:
+            logger.error(f"Error validating DCF applicability: {e}")
+            return {
+                "dcf_applicable": False,
+                "reason": f"Validation error: {str(e)}",
+                "valuation_method": "Revenue multiples or growth-based metrics suggested",
+                "suggested_metrics": {}
+            }
         
     async def value_company(
         self, 
@@ -210,6 +316,22 @@ class DCFValuationEngine:
             company_data = await self._fetch_company_data(ticker)
             if not company_data:
                 return {"error": "Unable to fetch company data"}
+            
+            # Validate if DCF is applicable for this company
+            logger.info(f"🔍 DCF: Starting validation for {ticker}")
+            dcf_validation = self._validate_dcf_applicability(company_data)
+            logger.info(f"🔍 DCF: Validation result for {ticker}: {dcf_validation}")
+            if not dcf_validation["dcf_applicable"]:
+                logger.warning(f"🚫 DCF skipped for loss-making company: {ticker}")
+                return {
+                    "ticker": ticker,
+                    "dcf_applicable": False,
+                    "reason": dcf_validation["reason"],
+                    "valuation_method": dcf_validation["valuation_method"],
+                    "suggested_metrics": dcf_validation["suggested_metrics"],
+                    "current_price": current_price,
+                    "warning": "⚠️ DCF analysis is unreliable for loss-making companies — using revenue-based valuation instead."
+                }
             
             # Generate scenarios if not provided
             if scenarios is None:
@@ -235,6 +357,23 @@ class DCFValuationEngine:
             # Calculate probability-weighted results
             weighted_result = self._calculate_weighted_dcf(scenario_results)
             
+            # Check if DCF calculation produced negative results
+            if weighted_result is None:
+                logger.warning(f"🚫 DCF calculation failed due to negative results for {ticker}")
+                return {
+                    "ticker": ticker,
+                    "dcf_applicable": False,
+                    "reason": "DCF calculation produced negative values - model not reliable for this company",
+                    "valuation_method": "Revenue multiples or growth-based metrics suggested",
+                    "suggested_metrics": {
+                        "revenue": company_data["info"].get("totalRevenue"),
+                        "market_cap": company_data["info"].get("marketCap"),
+                        "current_price": current_price
+                    },
+                    "current_price": current_price,
+                    "warning": "⚠️ DCF analysis produced negative values — using revenue-based valuation instead."
+                }
+            
             # Generate sensitivity analysis
             sensitivity = await self._sensitivity_analysis(company_data, scenarios[0].inputs)
             
@@ -243,6 +382,7 @@ class DCFValuationEngine:
             
             return {
                 "ticker": ticker,
+                "dcf_applicable": True,
                 "intrinsic_value": weighted_result.intrinsic_value_per_share,
                 "fair_value_range": {
                     "low": weighted_result.intrinsic_value_per_share * 0.8,
@@ -416,39 +556,86 @@ class DCFValuationEngine:
         if current_revenue_growth is None or current_revenue_growth <= 0:
             current_revenue_growth = 0.10  # 10% default
         
-        current_ebitda_margin = info.get("operatingMargins") or 0.15
+        # Use EBITDA margin, not operating margin
+        ebitda_raw = info.get("ebitda")
+        revenue_raw = info.get("totalRevenue") or info.get("revenue")
+        if ebitda_raw and revenue_raw and revenue_raw > 0:
+            current_ebitda_margin = ebitda_raw / revenue_raw
+            logger.info(f"DCF: Calculated EBITDA margin from data: {current_ebitda_margin:.2%}")
+        else:
+            current_ebitda_margin = info.get("operatingMargins") or 0.10
+            logger.warning(f"DCF: Using operating margin as EBITDA proxy: {current_ebitda_margin:.2%}")
+        
         if current_ebitda_margin is None or current_ebitda_margin <= 0:
-            current_ebitda_margin = 0.15  # 15% default
+            current_ebitda_margin = 0.10  # 10% default
         
         current_beta = info.get("beta") or 1.0
         if current_beta is None or current_beta <= 0:
             current_beta = 1.0  # Market beta
+        
+        # Calculate actual CapEx and Depreciation as % of revenue
+        ocf_raw = info.get("operatingCashflow")
+        fcf_raw = info.get("freeCashflow")
+        capex_raw = info.get("capitalExpenditures")
+        
+        actual_capex_ratio = 0.04  # Default 4%
+        actual_depreciation_ratio = 0.03  # Default 3%
+        
+        if revenue_raw and ocf_raw and fcf_raw:
+            # CapEx = OCF - FCF (since FCF = OCF - CapEx)
+            calculated_capex = ocf_raw - fcf_raw
+            actual_capex_ratio = abs(calculated_capex) / revenue_raw
+            logger.info(f"DCF: Calculated actual CapEx ratio: {actual_capex_ratio:.2%}")
+            
+            # Estimate depreciation (typically 60-80% of CapEx)
+            actual_depreciation_ratio = actual_capex_ratio * 0.7
+            logger.info(f"DCF: Estimated depreciation ratio: {actual_depreciation_ratio:.2%}")
+        
+        if capex_raw and revenue_raw:
+            capex_abs = abs(capex_raw)
+            actual_capex_ratio = capex_abs / revenue_raw
+            logger.info(f"DCF: Using Yahoo Finance CapEx ratio: {actual_capex_ratio:.2%}")
         
         debt_to_equity_raw = info.get("debtToEquity") or 50
         if debt_to_equity_raw is None or debt_to_equity_raw < 0:
             debt_to_equity_raw = 50
         current_debt_equity = debt_to_equity_raw / 100
         
+        # Get market cap for scenario generation
+        market_cap = info.get("marketCap") or 0
+        
         # Base scenario with intelligent defaults
+        # Use more realistic growth assumptions based on company size and sector
+        # Large mature companies: maintain growth near their historical average
+        sector = info.get("sector", "").lower()
+        is_large_mature = market_cap and market_cap > 100e9  # > $100B market cap
+        
+        # Adjust growth assumptions to be more realistic
+        growth_multipliers = [
+            1.0,   # Year 1: full growth
+            0.95,  # Year 2: slight moderation
+            0.95,  # Year 3: slight moderation  
+            0.85,  # Year 4-5: maturing
+            0.85,  # Year 4-5: maturing
+            0.75,  # Year 6-7: stable growth
+            0.75,  # Year 6-7: stable growth
+            0.70,  # Year 8-9: mature
+            0.70,  # Year 8-9: mature
+            0.60   # Year 10: terminal growth
+        ]
+        
         base_inputs = DCFInputs(
             revenue_growth_rates=[
-                current_revenue_growth * 0.9,  # Year 1: slight moderation
-                current_revenue_growth * 0.8,  # Year 2-3: further moderation
-                current_revenue_growth * 0.8,
-                current_revenue_growth * 0.6,  # Year 4-5: mature growth
-                current_revenue_growth * 0.6,
-                current_revenue_growth * 0.4,  # Year 6-10: stable growth
-                current_revenue_growth * 0.4,
-                current_revenue_growth * 0.3,
-                current_revenue_growth * 0.3,
-                current_revenue_growth * 0.2
+                current_revenue_growth * mult for mult in growth_multipliers
             ],
             ebitda_margins=[current_ebitda_margin] * 10,  # Stable margins
             terminal_growth_rate=terminal_growth,  # Sector-specific
             risk_free_rate=risk_free_rate,  # Country-specific
             market_risk_premium=market_risk_premium,  # Country-specific
             beta=current_beta,
-            debt_to_equity=current_debt_equity
+            debt_to_equity=current_debt_equity,
+            capex_pct_revenue=actual_capex_ratio,  # Use calculated CapEx ratio
+            depreciation_pct_revenue=actual_depreciation_ratio  # Use calculated depreciation ratio
             # All other parameters use defaults from DCFInputs dataclass
         )
         
@@ -461,7 +648,8 @@ class DCFValuationEngine:
             market_risk_premium=market_risk_premium,
             beta=current_beta * 0.9,  # Lower risk perception
             working_capital_pct_revenue=0.04,  # Better WC management
-            capex_pct_revenue=0.05,  # Higher investment for growth
+            capex_pct_revenue=actual_capex_ratio * 1.1,  # Higher investment but based on actual ratio
+            depreciation_pct_revenue=actual_depreciation_ratio * 1.1,  # Proportional to CapEx
             cost_of_debt=0.08,
             debt_to_equity=current_debt_equity * 0.8  # Lower leverage
         )
@@ -476,7 +664,8 @@ class DCFValuationEngine:
             beta=current_beta * 1.2,  # Higher risk
             tax_rate=0.30,  # Higher effective tax rate
             working_capital_pct_revenue=0.08,  # Worse WC management
-            capex_pct_revenue=0.03,  # Lower investment
+            capex_pct_revenue=actual_capex_ratio * 0.8,  # Lower investment but based on actual ratio
+            depreciation_pct_revenue=actual_depreciation_ratio * 0.8,  # Proportional to CapEx
             cost_of_debt=0.11,
             debt_to_equity=current_debt_equity * 1.2  # Higher leverage
         )
@@ -497,12 +686,14 @@ class DCFValuationEngine:
         info = company_data["info"]
         ticker = info.get("symbol", "")
         
+        # Get market cap early for later use
+        market_cap = info.get("marketCap") or 0
+        
         # Get current financials with multiple fallbacks
         current_revenue = info.get("totalRevenue") or info.get("revenue") or 0
         
         # If no revenue, try to estimate from market cap and multiples
         if not current_revenue or current_revenue <= 0:
-            market_cap = info.get("marketCap", 0)
             ps_ratio = info.get("priceToSalesTrailing12Months", 2.0)
             
             if market_cap and ps_ratio and ps_ratio > 0:
@@ -522,13 +713,20 @@ class DCFValuationEngine:
         
         wacc = (cost_of_equity * weight_equity) + (after_tax_cost_of_debt * weight_debt)
         
-        # Validate WACC is reasonable (5% to 30%)
-        if wacc < 0.05:
-            logger.warning(f"DCF: WACC too low ({wacc:.2%}), using 5% minimum")
-            wacc = 0.05
-        elif wacc > 0.30:
-            logger.warning(f"DCF: WACC too high ({wacc:.2%}), capping at 30%")
-            wacc = 0.30
+        # Validate WACC is reasonable with smarter caps based on company characteristics
+        # For large, stable companies like Walmart, use lower WACC
+        sector = info.get("sector", "").lower()
+        is_stable_defensive = any(term in sector for term in ["consumer", "defensive", "utilities", "energy"])
+        
+        wacc_min = 0.04 if is_stable_defensive else 0.05
+        wacc_max = 0.15 if is_stable_defensive else 0.30
+        
+        if wacc < wacc_min:
+            logger.warning(f"DCF: WACC too low ({wacc:.2%}), using {wacc_min:.0%} minimum")
+            wacc = wacc_min
+        elif wacc > wacc_max:
+            logger.warning(f"DCF: WACC too high ({wacc:.2%}), capping at {wacc_max:.0%}")
+            wacc = wacc_max
         
         # For Indian stocks, use more conservative WACC to match Screener.in methodology
         if ticker.endswith('.NS') or ticker.endswith('.BO'):
@@ -544,37 +742,39 @@ class DCFValuationEngine:
         
         # Project cash flows
         explicit_fcf = []
-        projected_revenue = current_revenue
+        
+        # Get starting FCF from company data (preferred method for Walmart-like companies)
+        starting_fcf = info.get("freeCashflow")
+        ocf_raw = info.get("operatingCashflow")
+        capex_raw = info.get("capitalExpenditures")
+        
+        if starting_fcf is None or starting_fcf <= 0:
+            # Calculate FCF from OCF and CapEx
+            if ocf_raw and capex_raw:
+                # CapEx is typically negative in Yahoo Finance
+                starting_fcf = ocf_raw + capex_raw
+                logger.info(f"DCF: Calculated starting FCF from OCF and CapEx: ${starting_fcf:,.0f}")
+            else:
+                # Fallback: estimate from revenue and margins
+                ebitda_start = current_revenue * inputs.ebitda_margins[0]
+                depreciation_start = current_revenue * inputs.depreciation_pct_revenue
+                capex_start = current_revenue * inputs.capex_pct_revenue
+                starting_fcf = (ebitda_start - depreciation_start) * (1 - inputs.tax_rate) + depreciation_start - capex_start
+                logger.info(f"DCF: Estimated starting FCF from revenue: ${starting_fcf:,.0f}")
+        
+        # Start with current year FCF and project forward
+        projected_fcf = starting_fcf
         
         for i, growth_rate in enumerate(inputs.revenue_growth_rates):
-            # Revenue projection
+            # Apply growth to FCF
+            projected_fcf *= (1 + growth_rate)
+            explicit_fcf.append(projected_fcf)
+        
+        # Track revenue for reference (not used in simplified model)
+        projected_revenue = current_revenue
+        for growth_rate in inputs.revenue_growth_rates:
             projected_revenue *= (1 + growth_rate)
             
-            # EBITDA
-            ebitda = projected_revenue * inputs.ebitda_margins[i]
-            
-            # EBIT (EBITDA - Depreciation)
-            depreciation = projected_revenue * inputs.depreciation_pct_revenue
-            ebit = ebitda - depreciation
-            
-            # NOPAT (Net Operating Profit After Tax)
-            nopat = ebit * (1 - inputs.tax_rate)
-            
-            # Change in Working Capital
-            if i == 0:
-                delta_wc = projected_revenue * inputs.working_capital_pct_revenue
-            else:
-                delta_wc = (projected_revenue - prev_revenue) * inputs.working_capital_pct_revenue
-            
-            # CapEx
-            capex = projected_revenue * inputs.capex_pct_revenue
-            
-            # Free Cash Flow to Firm (FCFF)
-            fcff = nopat + depreciation - capex - delta_wc
-            explicit_fcf.append(fcff)
-            
-            prev_revenue = projected_revenue
-        
         # Terminal Value - Multiple Methods
         terminal_value_methods = self._calculate_terminal_value_methods(explicit_fcf[-1], inputs, wacc)
         
@@ -591,7 +791,13 @@ class DCFValuationEngine:
         enterprise_value = pv_explicit_fcf + pv_terminal_value
         
         # Equity Value
-        net_debt = (info.get("totalDebt", 0) or 0) - (info.get("totalCash", 0) or 0)
+        # Use enterprise value vs market cap if available, otherwise calculate
+        enterprise_value_implied = info.get("enterpriseValue")
+        if enterprise_value_implied and market_cap and market_cap > 0:
+            net_debt = enterprise_value_implied - market_cap
+        else:
+            net_debt = (info.get("totalDebt", 0) or 0) - (info.get("totalCash", 0) or 0)
+        
         equity_value = enterprise_value - net_debt
         
         # Per-share value with fallbacks
@@ -599,7 +805,6 @@ class DCFValuationEngine:
         
         # If no shares data, try to estimate from market cap and price
         if not shares_outstanding or shares_outstanding <= 0:
-            market_cap = info.get("marketCap", 0)
             current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
             
             if market_cap and current_price and current_price > 0:
@@ -642,6 +847,8 @@ class DCFValuationEngine:
         
         # Gordon Growth Model
         if wacc > inputs.terminal_growth_rate:
+            # Terminal Value = FCF * (1 + g) / (r - g)
+            # where g is terminal growth rate and r is WACC
             methods["gordon_growth"] = (final_fcf * (1 + inputs.terminal_growth_rate)) / (wacc - inputs.terminal_growth_rate)
         else:
             methods["gordon_growth"] = final_fcf * 20  # Fallback multiple
@@ -649,8 +856,11 @@ class DCFValuationEngine:
         # Exit Multiple Method (FCF)
         methods["exit_multiple"] = final_fcf * inputs.terminal_fcf_multiple
         
-        # Perpetuity Growth Method (alternative to Gordon Growth)
-        methods["perpetuity_growth"] = final_fcf / (wacc - inputs.terminal_growth_rate)
+        # Perpetuity Growth Method (FCF at terminal year growth)
+        if wacc > inputs.terminal_growth_rate:
+            methods["perpetuity_growth"] = (final_fcf * (1 + inputs.terminal_growth_rate)) / (wacc - inputs.terminal_growth_rate)
+        else:
+            methods["perpetuity_growth"] = final_fcf * 20  # Fallback
         
         return methods
     
@@ -672,6 +882,13 @@ class DCFValuationEngine:
         
         # Use the base scenario's other values
         base_result = next(s["result"] for s in scenario_results if "Base" in s["scenario"])
+        
+        # Check for negative DCF results - indicates unreliable calculation
+        if (weighted_enterprise_value <= 0 or weighted_equity_value <= 0 or 
+            weighted_intrinsic_value <= 0):
+            logger.warning(f"🚫 Negative DCF results detected - DCF calculation unreliable")
+            # Return a flag indicating DCF is not applicable due to calculation issues
+            return None
         
         return DCFOutputs(
             enterprise_value=weighted_enterprise_value,

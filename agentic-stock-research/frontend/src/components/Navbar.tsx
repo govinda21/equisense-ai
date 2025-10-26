@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icons } from './icons'
+import { useTheme } from '../contexts/ThemeContext'
 
 interface NavbarProps {
   chatOpen?: boolean
@@ -9,12 +10,17 @@ interface NavbarProps {
 }
 
 export function Navbar({ chatOpen = false, onChatToggle, currentView = 'dashboard', onViewChange }: NavbarProps) {
-  const [dark, setDark] = useState(false)
+  const { theme, toggleTheme } = useTheme()
+  
+  // Sync theme to document root for dark mode classes
   useEffect(() => {
     const root = document.documentElement
-    if (dark) root.classList.add('dark')
-    else root.classList.remove('dark')
-  }, [dark])
+    if (theme === 'dark') {
+      root.classList.add('dark')
+    } else {
+      root.classList.remove('dark')
+    }
+  }, [theme])
 
   return (
     <header className="bg-white/80 dark:bg-slate-900/70 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:supports-[backdrop-filter]:bg-slate-900/60 sticky top-0 z-20 border-b border-slate-200 dark:border-slate-700">
@@ -73,10 +79,10 @@ export function Navbar({ chatOpen = false, onChatToggle, currentView = 'dashboar
           )}
           <button 
             className="rounded-lg border px-3 py-2 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" 
-            onClick={() => setDark(v => !v)} 
+            onClick={toggleTheme}
             aria-label="Toggle theme"
           >
-            {dark ? '☀️ Light' : '🌙 Dark'}
+            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
           </button>
         </div>
       </div>

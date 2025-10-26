@@ -8,6 +8,7 @@ import { LoadingOverlay, Spinner, ProgressBar } from './components/LoadingStates
 import { ErrorState } from './components/ErrorStates'
 import { BulkStockInput } from './components/BulkStockInput'
 import { RankedStockList } from './components/RankedStockList'
+import { ModernDashboard } from './components/ModernDashboard'
 // import { AuthProvider, useAuth, LoginForm } from './components/Auth'  // Disabled for now
 // import { EnhancedDashboard } from './components/EnhancedDashboard'  // Disabled for now
 
@@ -75,25 +76,42 @@ function AppContent({ chatOpen, currentView }: AppProps) {
   // Show dashboard or analysis based on current view
   if (currentView === 'dashboard') {
     return (
-      <div className="min-h-screen bg-gray-50 p-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl font-bold text-gray-900 mb-6">Dashboard</h1>
-          <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold mb-4">Welcome to Equisense AI</h2>
-            <p className="text-gray-600 mb-4">
-              This is a simplified dashboard view. The full dashboard is being loaded...
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 p-6">
+        <div className="max-w-7xl mx-auto">
+          <div className="mb-6">
+            <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 mb-2">
+              Dashboard
+            </h1>
+            <p className="text-slate-600 dark:text-slate-400">
+              Overview of your stock analysis and portfolio metrics
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <h3 className="font-semibold text-blue-900">Stock Analysis</h3>
-                <p className="text-blue-700 text-sm">Analyze individual stocks</p>
-              </div>
-              <div className="bg-green-50 p-4 rounded-lg">
-                <h3 className="font-semibold text-green-900">Bulk Ranking</h3>
-                <p className="text-green-700 text-sm">Compare multiple stocks</p>
+          </div>
+          
+          {data ? (
+            <ModernDashboard data={data} />
+          ) : (
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-lg p-12 text-center">
+              <Icons.TrendingUp className="w-16 h-16 text-slate-400 mx-auto mb-4" />
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-2">
+                Welcome to Equisense AI
+              </h2>
+              <p className="text-slate-600 dark:text-slate-400 mb-6">
+                Analyze a stock to see your dashboard data here
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-md mx-auto">
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 p-4 rounded-lg">
+                  <Icons.LineChart className="w-8 h-8 text-blue-600 dark:text-blue-400 mx-auto mb-2" />
+                  <h3 className="font-semibold text-blue-900 dark:text-blue-100">Stock Analysis</h3>
+                  <p className="text-blue-700 dark:text-blue-300 text-sm">Analyze individual stocks</p>
+                </div>
+                <div className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 p-4 rounded-lg">
+                  <Icons.BarChart3 className="w-8 h-8 text-green-600 dark:text-green-400 mx-auto mb-2" />
+                  <h3 className="font-semibold text-green-900 dark:text-green-100">Bulk Ranking</h3>
+                  <p className="text-green-700 dark:text-green-300 text-sm">Compare multiple stocks</p>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     )
@@ -482,9 +500,9 @@ function AppContent({ chatOpen, currentView }: AppProps) {
           <div className="container px-3 sm:px-4 md:px-6">
 
           {/* Side-by-side Layout - Mobile Responsive */}
-          <div className="flex flex-col lg:flex-row gap-4 sm:gap-6 min-h-[calc(100vh-180px)]">
+          <div className="flex flex-col lg:flex-row gap-4 sm:gap-6">
             {/* Main Content Area */}
-            <div className={`transition-all duration-300 space-y-4 sm:space-y-6 overflow-y-auto ${chatOpen ? 'lg:flex-1' : 'w-full'}`}>
+            <div className={`transition-all duration-300 space-y-4 sm:space-y-6 ${chatOpen ? 'lg:flex-1' : 'w-full'}`}>
               {/* Tab Navigation */}
               <div className="card p-2 backdrop-blur bg-white/80">
                 <div className="flex space-x-1">
@@ -652,8 +670,8 @@ function AppContent({ chatOpen, currentView }: AppProps) {
 
             {/* Chat Panel */}
             {chatOpen && (
-              <div className="w-96 flex-shrink-0">
-                <div className="h-full bg-white/80 dark:bg-slate-900/80 backdrop-blur rounded-xl shadow-lg overflow-hidden">
+              <div className="w-full lg:w-96 flex-shrink-0 h-[500px] lg:h-[600px]">
+                <div className="h-full bg-white/80 dark:bg-slate-900/80 backdrop-blur rounded-xl shadow-lg overflow-hidden flex flex-col">
                   <ErrorBoundary>
                     <ChatInterface 
                       analysisContext={{

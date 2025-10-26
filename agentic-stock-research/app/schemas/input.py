@@ -11,7 +11,7 @@ class ResearchRequest(BaseModel):
 
 class AnalysisRequest(BaseModel):
     tickers: List[str] = Field(default_factory=list)
-    country: Optional[str] = Field(default="India", description="Country for stock market")
+    country: Optional[str] = Field(default="United States", description="Country for stock market")
     horizon_short_days: int = Field(default=30, ge=1, le=365)
     horizon_long_days: int = Field(default=365, ge=30, le=1825)
 

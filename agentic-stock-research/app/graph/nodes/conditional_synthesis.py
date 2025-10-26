@@ -30,6 +30,7 @@ async def conditional_synthesis_node(state: ResearchState, settings: AppSettings
     - Simple analysis requests
     - Error recovery
     """
+    logger.info("🚀 CONDITIONAL SYNTHESIS NODE - NEW CODE VERSION")
     try:
         # Check if institutional analysis is requested
         analysis_type = state.get("analysis_type", "standard")
@@ -43,6 +44,9 @@ async def conditional_synthesis_node(state: ResearchState, settings: AppSettings
             state.get("include_charts", False) or
             state.get("include_appendix", False)
         )
+        
+        # TEMPORARY FIX: Always use standard synthesis until institutional synthesis is fixed
+        use_institutional = False
         
         if use_institutional:
             logger.info("Using institutional synthesis for enhanced analysis")

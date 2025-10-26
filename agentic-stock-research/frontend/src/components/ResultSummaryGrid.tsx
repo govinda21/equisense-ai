@@ -338,7 +338,13 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           {/* 4. DCF Scenarios */}
           <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
             <div className="text-xs text-purple-600 uppercase font-medium mb-2 text-center">DCF Scenarios</div>
-            {dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 ? (
+            {dcfValuation?.dcf_applicable === false ? (
+              <div className="text-center">
+                <div className="text-sm text-orange-600 font-medium mb-2">⚠️ DCF Not Applicable</div>
+                <div className="text-xs text-gray-600 mb-2">{dcfValuation.reason}</div>
+                <div className="text-xs text-gray-500">{dcfValuation.valuation_method}</div>
+              </div>
+            ) : dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 ? (
               <div className="space-y-1">
                 {dcfValuation.scenario_results.map((scenario: any, index: number) => (
                   <div key={index} className="flex justify-between items-center text-sm">
@@ -540,7 +546,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           {/* Financial Trends Grid */}
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
             {/* Revenue Analysis */}
-            {deepFinancialAnalysis.income_statement_trends?.total_revenue && (
+            {deepFinancialAnalysis?.income_statement_trends?.total_revenue && (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <h4 className="font-semibold text-blue-900 mb-3">Revenue Analysis</h4>
                 <div className="space-y-2 text-sm">
@@ -561,7 +567,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               )}
 
             {/* Profitability Analysis */}
-            {deepFinancialAnalysis.financial_ratios?.gross_margin && (
+            {deepFinancialAnalysis?.financial_ratios?.gross_margin && (
               <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                 <h4 className="font-semibold text-green-900 mb-3">Profitability</h4>
                 <div className="space-y-2 text-sm">
@@ -584,7 +590,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               )}
 
             {/* Growth Analysis */}
-            {deepFinancialAnalysis.growth_metrics?.revenue_growth && (
+            {deepFinancialAnalysis?.growth_metrics?.revenue_growth && (
               <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
                 <h4 className="font-semibold text-purple-900 mb-3">Growth Metrics</h4>
                 <div className="space-y-2 text-sm">

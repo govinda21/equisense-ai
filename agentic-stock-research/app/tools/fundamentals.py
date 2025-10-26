@@ -398,7 +398,11 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
     # ========== CRITICAL METRICS (Phase 1) ==========
     
     # Net Profit Margin
-    net_income = DataValidator.validate_financial_value(info.get("netIncome"), "Net Income", allow_negative=True)
+    net_income = DataValidator.validate_financial_value(
+        info.get("netIncome") or info.get("netIncomeCommonStockholders") or info.get("netIncomeToCommon"), 
+        "Net Income", 
+        allow_negative=True
+    )
     net_profit_margin = None
     if isinstance(net_income, (int, float)) and isinstance(revenue, (int, float)) and revenue:
         net_profit_margin = net_income / revenue
@@ -485,6 +489,12 @@ async def compute_fundamentals(ticker: str) -> Dict[str, Any]:
         "ticker": ticker,
         "sector": info.get("sector", ""),
         "industry": info.get("industry", ""),
+        
+        # Raw financial totals (CRITICAL: Added for DCF and analysis)
+        "revenue": _safe_float(revenue),
+        "net_income": _safe_float(net_income),
+        "free_cash_flow": _safe_float(free_cf),
+        "operating_cash_flow": _safe_float(operating_cf),
         
         # Legacy PE (for backward compatibility)
         "pe": _safe_float(pe),

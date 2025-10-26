@@ -1580,7 +1580,8 @@ class DeepFinancialAnalyzer:
                 return {
                     "score": float(weighted_score),
                     "grade": self._convert_score_to_grade(weighted_score),
-                    "strength_level": "strong" if weighted_score >= 80 else "moderate" if weighted_score >= 60 else "weak",
+                    "strength_level": "strong" if weighted_score >= 75 else "moderate" if weighted_score >= 55 else "weak",
+                    "grade_explanation": self._generate_grade_explanation(weighted_score, strength_metrics),
                     "components": {
                         "debt_strength": strength_metrics.get("debt_analysis", {}).get("debt_equity_ratio", {}).get("strength_score", "unknown"),
                         "interest_coverage": strength_metrics.get("interest_coverage", {}).get("adequacy_score", "unknown"),
@@ -1598,19 +1599,22 @@ class DeepFinancialAnalyzer:
 
     # Helper methods for balance sheet forensics
     def _assess_debt_strength_score(self, debt_ratios: List[float]) -> str:
-        """Assess debt strength score"""
+        """Assess debt strength score - Institutional Grade Thresholds"""
         if not debt_ratios:
             return "unknown"
         
         avg_ratio = float(np.mean(debt_ratios))
-        if avg_ratio < 0.3:
-            return "excellent"
-        elif avg_ratio < 0.5:
-            return "good"
-        elif avg_ratio < 0.7:
-            return "fair"
+        # More realistic thresholds for capital-intensive conglomerates
+        if avg_ratio < 0.2:
+            return "excellent"  # Very conservative
+        elif avg_ratio < 0.4:
+            return "good"       # Conservative (Reliance ~0.41x)
+        elif avg_ratio < 0.6:
+            return "fair"       # Moderate leverage
+        elif avg_ratio < 0.8:
+            return "moderate"   # Higher leverage but manageable
         else:
-            return "poor"
+            return "poor"       # High leverage risk
     
     def _assess_interest_coverage_adequacy(self, coverage_ratios: List[float]) -> str:
         """Assess interest coverage adequacy"""
@@ -1737,20 +1741,40 @@ class DeepFinancialAnalyzer:
             return "poor"
     
     def _assess_accrual_quality_score(self, accruals: List[float], normalized_accruals: List[float]) -> str:
-        """Assess accrual quality score"""
+        """Assess accrual quality score - adjusted for large companies"""
         if not accruals:
             return "unknown"
         
-        # Lower volatility in accruals indicates better quality
-        volatility = self._calculate_volatility(accruals)
-        if volatility < 0.2:
-            return "excellent"
-        elif volatility < 0.4:
-            return "good"
-        elif volatility < 0.6:
-            return "fair"
+        # Use normalized accruals if available (relative to assets)
+        if normalized_accruals and len(normalized_accruals) >= 3:
+            volatility = self._calculate_volatility(normalized_accruals)
+            # More lenient thresholds for normalized accruals
+            if volatility < 0.1:
+                return "excellent"
+            elif volatility < 0.2:
+                return "good"
+            elif volatility < 0.3:
+                return "fair"
+            else:
+                return "poor"
         else:
-            return "poor"
+            # For absolute accruals, use coefficient of variation (CV) instead of raw volatility
+            mean_accruals = abs(sum(accruals) / len(accruals))
+            if mean_accruals == 0:
+                return "unknown"
+            
+            volatility = self._calculate_volatility(accruals)
+            cv = volatility / mean_accruals  # Coefficient of variation
+            
+            # More appropriate thresholds for large companies
+            if cv < 0.5:
+                return "excellent"
+            elif cv < 1.0:
+                return "good"
+            elif cv < 2.0:
+                return "fair"
+            else:
+                return "poor"
     
     def _assess_revenue_consistency_score(self, growth_rates: List[float]) -> str:
         """Assess revenue consistency score"""
@@ -1768,22 +1792,60 @@ class DeepFinancialAnalyzer:
             return "poor"
     
     def _assess_revenue_quality_score(self, revenue_values: List[float], growth_rates: List[float]) -> str:
-        """Assess overall revenue quality score"""
+        """Assess overall revenue quality score - improved methodology"""
         if not revenue_values or not growth_rates:
             return "unknown"
         
-        # Check for consistent positive growth
+        # Multiple factors for revenue quality assessment
+        factors = []
+        
+        # 1. Growth consistency (40% weight)
         positive_growth_count = sum(1 for rate in growth_rates if rate > 0)
         consistency_ratio = positive_growth_count / len(growth_rates)
-        
         if consistency_ratio >= 0.8:
-            return "excellent"
+            factors.append(4)  # excellent
         elif consistency_ratio >= 0.6:
-            return "good"
+            factors.append(3)  # good
         elif consistency_ratio >= 0.4:
-            return "fair"
+            factors.append(2)  # fair
         else:
-            return "poor"
+            factors.append(1)  # poor
+        
+        # 2. Growth stability (30% weight) - lower volatility is better
+        if len(growth_rates) >= 3:
+            volatility = self._calculate_volatility(growth_rates)
+            if volatility < 0.1:
+                factors.append(4)  # excellent
+            elif volatility < 0.2:
+                factors.append(3)  # good
+            elif volatility < 0.3:
+                factors.append(2)  # fair
+            else:
+                factors.append(1)  # poor
+        
+        # 3. Revenue trend (30% weight) - positive trend is better
+        if len(revenue_values) >= 3:
+            trend = self._calculate_trend_direction(revenue_values)
+            if trend == "increasing":
+                factors.append(4)  # excellent
+            elif trend == "stable":
+                factors.append(3)  # good
+            else:
+                factors.append(2)  # fair
+        
+        # Calculate weighted average
+        if factors:
+            avg_score = sum(factors) / len(factors)
+            if avg_score >= 3.5:
+                return "excellent"
+            elif avg_score >= 2.5:
+                return "good"
+            elif avg_score >= 1.5:
+                return "fair"
+            else:
+                return "poor"
+        
+        return "unknown"
     
     def _assess_working_capital_efficiency(self, turnover_ratios: List[float]) -> str:
         """Assess working capital efficiency"""
@@ -1900,25 +1962,52 @@ class DeepFinancialAnalyzer:
             return {"risk_level": "unknown", "risk_score": 0, "risk_factors_count": 0, "overall_assessment": "unknown"}
     
     def _convert_quality_score_to_numeric(self, quality_score: str) -> float:
-        """Convert quality score string to numeric value"""
+        """Convert quality score string to numeric value - Institutional Grade Mapping"""
         score_map = {
-            "excellent": 90,
-            "good": 75,
-            "fair": 60,
-            "poor": 40,
-            "unknown": 50
+            "excellent": 85,  # A grade
+            "good": 75,       # B grade  
+            "fair": 65,       # C+ grade
+            "moderate": 60,   # C grade
+            "poor": 45,       # C- grade
+            "weak": 35,       # D grade
+            "unknown": 50    # Default neutral
         }
         return score_map.get(quality_score, 50)
     
+    def _generate_grade_explanation(self, score: float, strength_metrics: Dict[str, Any]) -> str:
+        """Generate contextual explanation for balance sheet grade"""
+        try:
+            # Get key metrics for context
+            debt_ratio = strength_metrics.get("debt_analysis", {}).get("debt_equity_ratio", {}).get("latest_ratio", 0)
+            interest_coverage = strength_metrics.get("interest_coverage", {}).get("latest", 0)
+            current_ratio = strength_metrics.get("liquidity", {}).get("current_ratio", {}).get("latest", 0)
+            
+            if score >= 75:
+                return f"Strong balance sheet with excellent debt management (D/E: {debt_ratio:.2f}x, Interest Coverage: {interest_coverage:.1f}x)"
+            elif score >= 65:
+                return f"Good balance sheet strength with moderate leverage (D/E: {debt_ratio:.2f}x, Interest Coverage: {interest_coverage:.1f}x)"
+            elif score >= 55:
+                return f"Moderate balance sheet strength; leverage acceptable for capital-intensive business (D/E: {debt_ratio:.2f}x, Interest Coverage: {interest_coverage:.1f}x)"
+            elif score >= 45:
+                return f"Below-average balance sheet strength; elevated leverage concerns (D/E: {debt_ratio:.2f}x, Interest Coverage: {interest_coverage:.1f}x)"
+            else:
+                return f"Weak balance sheet with high leverage risk (D/E: {debt_ratio:.2f}x, Interest Coverage: {interest_coverage:.1f}x)"
+        except Exception:
+            return "Balance sheet assessment based on available financial metrics"
+    
     def _convert_score_to_grade(self, score: float) -> str:
-        """Convert numeric score to letter grade"""
-        if score >= 90:
+        """Convert numeric score to letter grade - Institutional Grade Thresholds"""
+        if score >= 85:
             return "A"
-        elif score >= 80:
+        elif score >= 75:
             return "B"
-        elif score >= 70:
+        elif score >= 65:
+            return "C+"
+        elif score >= 55:
             return "C"
-        elif score >= 60:
+        elif score >= 45:
+            return "C-"
+        elif score >= 35:
             return "D"
         else:
             return "F"

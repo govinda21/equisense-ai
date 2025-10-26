@@ -187,6 +187,90 @@ def _safe_get_professional_recommendation(action: str, score: float) -> str:
         return f"{action} ({round(score * 5, 1) if score else 2.5}/5)"
 
 
+def _generate_institutional_risk_assessment(analysis: Dict[str, Any], final_report: Dict[str, Any], conviction_score: float) -> Dict[str, Any]:
+    """Generate institutional-grade risk assessment"""
+    try:
+        risk_factors = []
+        risk_score = 0
+        
+        # 1. Financial Risk Assessment
+        fundamentals = analysis.get("fundamentals", {})
+        if fundamentals:
+            details = fundamentals.get("details", {})
+            deep_financial = details.get("deep_financial_analysis", {})
+            
+            # Balance Sheet Risk
+            balance_sheet = deep_financial.get("balance_sheet_strength", {})
+            bs_score = balance_sheet.get("overall_strength_score", {}).get("score", 50)
+            if bs_score < 60:
+                risk_factors.append("Balance sheet weakness")
+                risk_score += 15
+            
+            # Earnings Quality Risk
+            earnings_quality = deep_financial.get("earnings_quality", {})
+            eq_score = earnings_quality.get("overall_quality_score", {}).get("score", 50)
+            if eq_score < 70:
+                risk_factors.append("Earnings quality concerns")
+                risk_score += 10
+        
+        # 2. Market Risk Assessment
+        technicals = analysis.get("technicals", {})
+        if technicals:
+            technical_score = technicals.get("overall_score", 50)
+            if technical_score < 40:
+                risk_factors.append("Technical weakness")
+                risk_score += 12
+        
+        # 3. Sentiment Risk Assessment
+        news_sentiment = analysis.get("news_sentiment", {})
+        if news_sentiment:
+            sentiment_score = news_sentiment.get("overall_sentiment_score", 50)
+            if sentiment_score < 40:
+                risk_factors.append("Negative sentiment")
+                risk_score += 8
+        
+        # 4. Strategic Conviction Risk
+        if conviction_score < 40:
+            risk_factors.append("Low strategic conviction")
+            risk_score += 10
+        
+        # 5. Sector Risk Assessment
+        sector_macro = analysis.get("sector_macro", {})
+        if sector_macro:
+            sector_score = sector_macro.get("overall_score", 50)
+            if sector_score < 45:
+                risk_factors.append("Sector headwinds")
+                risk_score += 8
+        
+        # Calculate overall risk level
+        if risk_score >= 40:
+            risk_level = "High"
+        elif risk_score >= 25:
+            risk_level = "Moderate"
+        elif risk_score >= 15:
+            risk_level = "Low"
+        else:
+            risk_level = "Minimal"
+        
+        return {
+            "overall_risk_level": risk_level,
+            "risk_score": min(risk_score, 50),  # Cap at 50
+            "risk_factors": risk_factors,
+            "risk_factors_count": len(risk_factors),
+            "assessment": f"Risk assessment based on {len(risk_factors)} identified factors"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating risk assessment: {str(e)}")
+        return {
+            "overall_risk_level": "Unknown",
+            "risk_score": 25,
+            "risk_factors": [],
+            "risk_factors_count": 0,
+            "assessment": "Risk assessment unavailable"
+        }
+
+
 def _build_executive_summary(action: str, score: float, analysis: dict, positives: list, negatives: list) -> str:
     """Create a concise one-line executive summary.
     Uses comprehensive fundamentals (DCF) if available; otherwise omits gracefully.
@@ -328,11 +412,28 @@ def _generate_senior_analyst_recommendation(
     dcf = fund.get("dcf_valuation", {})
     intrinsic_value = dcf.get("intrinsic_value")
     margin_of_safety = dcf.get("margin_of_safety")
-    current_price = fund.get("current_price") or tech.get("current_price")
+    # Get current price from multiple sources
+    current_price = (fund.get("current_price") or 
+                   fund.get("basic_fundamentals", {}).get("current_price") or 
+                   tech.get("current_price"))
     
     exec_summary = f"We rate {ticker} as {action} with {round(score * 100)}% conviction. "
     
-    if intrinsic_value and margin_of_safety and current_price:
+    # Handle DCF applicability
+    if not dcf.get("dcf_applicable", True):
+        # For loss-making companies, use alternative valuation approach
+        suggested_metrics = dcf.get("suggested_metrics", {})
+        revenue = suggested_metrics.get("revenue")
+        price_to_sales = suggested_metrics.get("price_to_sales_ratio")
+        
+        if revenue and price_to_sales and current_price:
+            exec_summary += f"As a loss-making company, traditional DCF valuation is not applicable. "
+            exec_summary += f"Current valuation trades at {price_to_sales:.1f}x revenue (₹{revenue:,.0f} Cr), requiring revenue growth and path to profitability for upside. "
+        else:
+            exec_summary += f"As a loss-making company, traditional DCF valuation is not applicable. "
+            exec_summary += f"Investment thesis depends on growth prospects and path to profitability. "
+    elif intrinsic_value and margin_of_safety and current_price:
+        # Standard DCF analysis for profitable companies
         mos_pct = margin_of_safety * 100
         if mos_pct > 0:
             exec_summary += f"Our DCF analysis indicates an intrinsic value of {intrinsic_value:.2f}, suggesting {abs(mos_pct):.0f}% upside potential from current levels ({current_price:.2f}). "
@@ -580,7 +681,8 @@ def _identify_growth_drivers(growth: dict, strategic_conviction: dict, fund: dic
     
     # PRIORITY 2: From strategic conviction growth catalysts (more specific than TAM)
     if strategic_conviction:
-        growth_runway = strategic_conviction.get("growth_runway", {})
+        details = strategic_conviction.get('details', {})
+        growth_runway = details.get("growth_runway", {})
         if growth_runway:
             # Use specific growth catalysts from strategic conviction
             catalysts = growth_runway.get("growth_catalysts", [])
@@ -629,7 +731,8 @@ def _identify_growth_drivers(growth: dict, strategic_conviction: dict, fund: dic
     
     # PRIORITY 4: Fallback to generic TAM analysis only if no specific drivers found
     if not drivers and strategic_conviction:
-        growth_runway = strategic_conviction.get("growth_runway", {})
+        details = strategic_conviction.get('details', {})
+        growth_runway = details.get("growth_runway", {})
         if growth_runway:
             tam_analysis = growth_runway.get("tam_analysis", {})
             if tam_analysis.get("estimated_cagr"):
@@ -670,7 +773,8 @@ def _identify_competitive_advantages(growth: dict, strategic_conviction: dict, f
     
     # PRIORITY 2: From strategic conviction analysis
     if strategic_conviction:
-        business_quality = strategic_conviction.get("business_quality", {})
+        details = strategic_conviction.get('details', {})
+        business_quality = details.get("business_quality", {})
         if business_quality:
             moats = business_quality.get("competitive_moats", [])
             for moat in moats[:2]:
@@ -753,7 +857,8 @@ def _identify_key_risks(negatives: List[str], strategic_conviction: dict, fund: 
     
     # Macro risks from strategic conviction
     if strategic_conviction and isinstance(strategic_conviction, dict):
-        macro_resilience = strategic_conviction.get("macro_resilience", {})
+        details = strategic_conviction.get('details', {})
+        macro_resilience = details.get("macro_resilience", {})
         if isinstance(macro_resilience, dict):
             cyclicality = macro_resilience.get("cyclicality_assessment", {})
             if isinstance(cyclicality, dict) and cyclicality.get("score", 100) < 50:
@@ -798,10 +903,22 @@ def _build_quantitative_evidence(fund: dict, cashflow: dict, valuation: dict, dc
         evidence["fcf_yield"] = f"{cashflow['fcf_yield']*100:.1f}%"
     
     # DCF metrics
-    if dcf.get("intrinsic_value"):
-        evidence["intrinsic_value"] = round(dcf["intrinsic_value"], 2)
-    if dcf.get("margin_of_safety"):
-        evidence["margin_of_safety"] = f"{dcf['margin_of_safety']*100:.1f}%"
+    if not dcf.get("dcf_applicable", True):
+        # For non-applicable DCF, show alternative metrics
+        suggested_metrics = dcf.get("suggested_metrics", {})
+        if suggested_metrics.get("revenue"):
+            evidence["revenue"] = f"₹{suggested_metrics['revenue']:,.0f} Cr"
+        if suggested_metrics.get("price_to_sales_ratio"):
+            evidence["price_to_sales"] = f"{suggested_metrics['price_to_sales_ratio']:.1f}x"
+        if suggested_metrics.get("revenue_growth_yoy"):
+            evidence["revenue_growth"] = f"{suggested_metrics['revenue_growth_yoy']*100:.1f}%"
+        evidence["dcf_status"] = "Not applicable (loss-making company)"
+    else:
+        # Standard DCF metrics for applicable companies
+        if dcf.get("intrinsic_value"):
+            evidence["intrinsic_value"] = round(dcf["intrinsic_value"], 2)
+        if dcf.get("margin_of_safety"):
+            evidence["margin_of_safety"] = f"{dcf['margin_of_safety']*100:.1f}%"
     
     return evidence
 
@@ -1293,6 +1410,24 @@ def _build_long_term_outlook(action: str, score: float, growth: dict, strategic_
 def _determine_price_target(analyst: dict, dcf: dict, current_price: Optional[float], expected_return: float) -> Tuple[Optional[float], str]:
     """Determine 12-month price target and source"""
     
+    # Check if DCF is applicable
+    if not dcf.get("dcf_applicable", True):
+        logger.warning("⚠️ Using revenue multiple–based valuation instead of DCF")
+        # For loss-making companies, use revenue-based valuation
+        suggested_metrics = dcf.get("suggested_metrics", {})
+        revenue = suggested_metrics.get("revenue")
+        price_to_sales = suggested_metrics.get("price_to_sales_ratio")
+        
+        if current_price and expected_return:
+            # Calculate price target based on expected return
+            calculated_target = current_price * (1 + expected_return / 100)
+            return round(calculated_target, 2), f"Expected return-based target ({expected_return:.1f}% return)"
+        elif revenue and price_to_sales and current_price:
+            # Use P/S ratio for revenue-based valuation
+            return round(current_price, 2), "Revenue-based valuation (DCF not applicable)"
+        else:
+            return None, "DCF not applicable - insufficient data for alternative valuation"
+    
     # Priority 1: Analyst consensus target
     target_prices = analyst.get("target_prices", {})
     analyst_mean_target = target_prices.get("mean")
@@ -1371,6 +1506,20 @@ def _calculate_expected_return(analyst: dict, fund: dict, current_price: Optiona
     
     # Priority 4: DCF target price-based expected return (not intrinsic value)
     dcf_valuation = fund.get("dcf_valuation", {})
+    
+    # Check if DCF is applicable
+    if not dcf_valuation.get("dcf_applicable", True):
+        logger.warning("⚠️ DCF not applicable - skipping DCF-based expected return calculation")
+        # For loss-making companies, use revenue growth-based expected return
+        suggested_metrics = dcf_valuation.get("suggested_metrics", {})
+        revenue_growth = suggested_metrics.get("revenue_growth_yoy")
+        
+        if revenue_growth and isinstance(revenue_growth, (int, float)):
+            # Use revenue growth as proxy for expected return (conservative estimate)
+            revenue_based_return = min(revenue_growth * 0.5, 25)  # Cap at 25%
+            logger.info(f"Using revenue growth-based expected return: {revenue_based_return:.1f}%")
+            return round(revenue_based_return, 1)
+    
     dcf_target_price = dcf_valuation.get("target_price")
     if dcf_target_price and dcf_target_price > 0 and current_price and current_price > 0:
         dcf_return = ((dcf_target_price - current_price) / current_price) * 100
@@ -1523,10 +1672,12 @@ def _calculate_base_score(analysis: dict) -> float:
     
     # Strategic Conviction (15% weight) - NEW
     strategic_conviction = analysis.get("strategic_conviction", {})
-    if strategic_conviction.get("overall_conviction_score") is not None:
-        conviction_score = strategic_conviction["overall_conviction_score"] / 100.0
-        scores.append(conviction_score)
-        weights.append(0.15)
+    if strategic_conviction:
+        details = strategic_conviction.get('details', {})
+        if details.get("overall_conviction_score") is not None:
+            conviction_score = details["overall_conviction_score"] / 100.0
+            scores.append(conviction_score)
+            weights.append(0.15)
     
     # Peer Analysis (10% weight) - reduced from 15%
     peer = analysis.get("peer_analysis", {})
@@ -1574,8 +1725,15 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
     from app.tools.nlp import _ollama_chat
     import asyncio
     
+    logger.info("🚀 STARTING SYNTHESIS NODE - NEW CODE VERSION")
+    
     ticker = state["tickers"][0]
     a = state.get("analysis", {})
+    
+    # DEBUG: Check analysis object contents
+    logger.info(f"🔍 SYNTHESIS DEBUG: Analysis object keys: {list(a.keys())}")
+    logger.info(f"🔍 SYNTHESIS DEBUG: Strategic conviction in analysis: {bool(a.get('strategic_conviction'))}")
+    logger.info(f"🔍 SYNTHESIS DEBUG: Sector rotation in analysis: {bool(a.get('sector_rotation'))}")
     
     # Log synthesis start
     logger.info(f"Starting synthesis for {ticker} with enhanced DCF scenarios")
@@ -1592,8 +1750,36 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
     sm = a.get("sector_macro", {})
     growth = a.get("growth_prospects", {})
     valuation = a.get("valuation", {})
-    strategic_conviction = a.get("strategic_conviction", {})
-    sector_rotation = a.get("sector_rotation", {})
+    
+    # ROBUST DATA ACCESS: Strategic Conviction with null-safe approach
+    # Check both analysis object and state directly for strategic conviction data
+    strategic_conviction_data = a.get("strategic_conviction", {}) or state.get("analysis", {}).get("strategic_conviction", {})
+    
+    # If still not found, check if it's already in the final output (workflow execution order issue)
+    if not strategic_conviction_data and state.get("final_output", {}).get("reports"):
+        final_report = state["final_output"]["reports"][0]
+        strategic_conviction_data = final_report.get("strategic_conviction", {})
+    
+    strategic_conviction_details = strategic_conviction_data.get("details", {}) if strategic_conviction_data else {}
+    conviction_score = strategic_conviction_details.get("overall_conviction_score", 50.0) if strategic_conviction_details else 50.0
+    conviction_level = strategic_conviction_details.get("conviction_level", "Medium Conviction") if strategic_conviction_details else "Medium Conviction"
+    strategic_recommendation = strategic_conviction_details.get("strategic_recommendation", "Hold") if strategic_conviction_details else "Hold"
+    
+    # ROBUST DATA ACCESS: Sector Rotation with null-safe approach
+    # Check both analysis object and state directly for sector rotation data
+    sector_rotation_data = a.get("sector_rotation", {}) or state.get("analysis", {}).get("sector_rotation", {})
+    
+    # If still not found, check if it's already in the final output (workflow execution order issue)
+    if not sector_rotation_data and state.get("final_output", {}).get("reports"):
+        final_report = state["final_output"]["reports"][0]
+        sector_rotation_data = final_report.get("sector_rotation", {})
+    
+    sector_rotation_details = sector_rotation_data.get("details", {}) if sector_rotation_data else {}
+    
+    # Backward compatibility - keep original variables for existing code
+    strategic_conviction = strategic_conviction_data
+    sector_rotation = sector_rotation_data
+    
     
     # Add detailed logging for data flow tracing
     logger.info(f"🔍 Synthesis sees comprehensive_fundamentals keys: {list(fund.keys()) if fund else 'empty'}")
@@ -1608,7 +1794,8 @@ async def synthesis_node(state: ResearchState, settings: AppSettings) -> Researc
     # DEBUG: Check what's in strategic_conviction
     logger.info(f"DEBUG synthesis: strategic_conviction data present: {bool(strategic_conviction)}, keys: {strategic_conviction.keys() if strategic_conviction else 'empty'}")
     if strategic_conviction:
-        logger.info(f"DEBUG synthesis: strategic_conviction sample data - score: {strategic_conviction.get('overall_conviction_score')}, level: {strategic_conviction.get('conviction_level')}, recommendation: {strategic_conviction.get('strategic_recommendation')}")
+        details = strategic_conviction.get('details', {})
+        logger.info(f"DEBUG synthesis: strategic_conviction sample data - score: {details.get('overall_conviction_score')}, level: {details.get('conviction_level')}, recommendation: {details.get('strategic_recommendation')}")
     
     # DEBUG: Check what's in sector_rotation
     logger.info(f"DEBUG synthesis: sector_rotation data present: {bool(sector_rotation)}, keys: {sector_rotation.keys() if sector_rotation else 'empty'}")
@@ -1698,14 +1885,14 @@ Overall Outlook: {growth.get('growth_outlook', {}).get('overall_outlook', 'N/A')
 {valuation.get('valuation_summary', 'No valuation data available')}
 
 **Strategic Conviction Analysis:**
-Conviction Score: {strategic_conviction.get('overall_conviction_score', 'N/A')}/100
-Conviction Level: {strategic_conviction.get('conviction_level', 'N/A')}
-Strategic Recommendation: {strategic_conviction.get('strategic_recommendation', 'N/A')}
-Position Sizing: {strategic_conviction.get('position_sizing_pct', 'N/A')}%
-Business Quality: {strategic_conviction.get('business_quality', {}).get('score', 'N/A')}/100
-Growth Runway: {strategic_conviction.get('growth_runway', {}).get('score', 'N/A')}/100
-Valuation Asymmetry: {strategic_conviction.get('valuation_asymmetry', {}).get('score', 'N/A')}/100
-Macro Resilience: {strategic_conviction.get('macro_resilience', {}).get('score', 'N/A')}/100
+Conviction Score: {strategic_conviction.get('details', {}).get('overall_conviction_score', 'N/A')}/100
+Conviction Level: {strategic_conviction.get('details', {}).get('conviction_level', 'N/A')}
+Strategic Recommendation: {strategic_conviction.get('details', {}).get('strategic_recommendation', 'N/A')}
+Position Sizing: {strategic_conviction.get('details', {}).get('position_sizing_pct', 'N/A')}%
+Business Quality: {strategic_conviction.get('details', {}).get('business_quality', {}).get('score', 'N/A')}/100
+Growth Runway: {strategic_conviction.get('details', {}).get('growth_runway', {}).get('score', 'N/A')}/100
+Valuation Asymmetry: {strategic_conviction.get('details', {}).get('valuation_asymmetry', {}).get('score', 'N/A')}/100
+Macro Resilience: {strategic_conviction.get('details', {}).get('macro_resilience', {}).get('score', 'N/A')}/100
 
 Based on this analysis, provide:
 1. Overall score from 0-1 (0=strong sell, 0.5=neutral, 1=strong buy)
@@ -1780,7 +1967,7 @@ RETURN: [X.X]%"""
                         extracted_action = match.group(group).strip()
                         
                         # Get conviction level for threshold adjustment
-                        conviction_level = strategic_conviction.get("conviction_level", "Medium Conviction") if strategic_conviction else "Medium Conviction"
+                        conviction_level = strategic_conviction.get("details", {}).get("conviction_level", "Medium Conviction") if strategic_conviction else "Medium Conviction"
                         
                         # Apply conviction-adjusted thresholds to LLM-extracted action
                         if 'buy' in extracted_action:
@@ -1924,8 +2111,8 @@ RETURN: [X.X]%"""
                 "sector_macro": {"summary": "Sector and macro outlook", "confidence": state.get("confidences", {}).get("sector_macro", 0.5), "details": sm},
                 "growth_prospects": {"summary": growth.get("summary", ""), "confidence": state.get("confidences", {}).get("growth_prospects", 0.5), "details": growth},
                 "valuation": {"summary": valuation.get("valuation_summary", ""), "confidence": state.get("confidences", {}).get("valuation", 0.5), "details": valuation},
-                "strategic_conviction": {"summary": strategic_conviction.get("strategic_recommendation", ""), "confidence": state.get("confidences", {}).get("strategic_conviction", 0.5), "details": strategic_conviction} if strategic_conviction else None,
-                "sector_rotation": {"summary": sector_rotation.get("recommendation", ""), "confidence": state.get("confidences", {}).get("sector_rotation", 0.5), "details": sector_rotation} if sector_rotation else None,
+                "strategic_conviction": {"summary": strategic_recommendation, "confidence": state.get("confidences", {}).get("strategic_conviction", 0.5), "details": strategic_conviction_data} if strategic_conviction_data else None,
+                "sector_rotation": {"summary": sector_rotation_details.get("recommendation", ""), "confidence": state.get("confidences", {}).get("sector_rotation", 0.5), "details": sector_rotation_data} if sector_rotation_data else None,
                 "earnings_call_analysis": a.get("earnings_calls") if a.get("earnings_calls") else None,
                 "comprehensive_fundamentals": _create_comprehensive_fundamentals_output(fund) if fund else None,
             }
@@ -1956,6 +2143,55 @@ RETURN: [X.X]%"""
         horizon_long_days=state.get("horizon_long_days", 365)
     )
     
+    # PHASE 7 FIX: Robust strategic conviction data integration
+    # Get strategic conviction data from final report (guaranteed to exist)
+    final_report = state["final_output"]["reports"][0]
+    final_strategic_conviction = final_report.get("strategic_conviction", {})
+    
+    # Initialize with defaults
+    conviction_score = 50.0
+    conviction_level = "Medium Conviction"
+    strategic_recommendation = "Hold"
+    
+    if final_strategic_conviction:
+        final_details = final_strategic_conviction.get("details", {})
+        conviction_score = final_details.get("overall_conviction_score", 50.0)
+        conviction_level = final_details.get("conviction_level", "Medium Conviction")
+        strategic_recommendation = final_details.get("strategic_recommendation", "Hold")
+        logger.info(f"✅ PHASE 7: Strategic conviction integrated - Level: {conviction_level}, Score: {conviction_score}")
+    else:
+        logger.warning("⚠️ PHASE 7: No strategic conviction data found, using defaults")
+    
+    # Ensure variables are properly set for decision object
+    conviction_score = float(conviction_score) if conviction_score else 50.0
+    conviction_level = str(conviction_level) if conviction_level else "Medium Conviction"
+    strategic_recommendation = str(strategic_recommendation) if strategic_recommendation else "Hold"
+    
+    # PHASE 7: Institutional-Grade Risk Assessment
+    risk_assessment = _generate_institutional_risk_assessment(a, final_report, conviction_score)
+    
+    # PHASE 7 POST-PROCESSING: Ensure all data is properly integrated
+    # This ensures Phase 7 components are available regardless of execution order
+    final_report = state["final_output"]["reports"][0]
+    
+    # Get strategic conviction data from final report
+    strategic_conviction_data = final_report.get("strategic_conviction", {})
+    if strategic_conviction_data:
+        strategic_details = strategic_conviction_data.get("details", {})
+        conviction_score = float(strategic_details.get("overall_conviction_score", 50.0))
+        conviction_level = str(strategic_details.get("conviction_level", "Medium Conviction"))
+        strategic_recommendation = str(strategic_details.get("strategic_recommendation", "Hold"))
+        logger.info(f"✅ PHASE 7 POST-PROCESSING: Strategic conviction data integrated")
+    else:
+        conviction_score = 50.0
+        conviction_level = "Medium Conviction"
+        strategic_recommendation = "Hold"
+        logger.warning("⚠️ PHASE 7 POST-PROCESSING: No strategic conviction data found")
+    
+    # Generate risk assessment
+    risk_assessment = _generate_institutional_risk_assessment(a, final_report, conviction_score)
+    logger.info(f"✅ PHASE 7 POST-PROCESSING: Risk assessment generated - Level: {risk_assessment.get('overall_risk_level', 'Unknown')}")
+    
     # Add decision to the first report with all senior analyst fields
     state["final_output"]["reports"][0]["decision"] = {
                     "action": action,
@@ -1976,10 +2212,13 @@ RETURN: [X.X]%"""
                     "professional_recommendation": _safe_get_professional_recommendation(action, composite_score),
                     "debug_test": "professional_fields_in_main_decision",
                     
-                    # Strategic Conviction Integration
-                    "conviction_level": strategic_conviction["details"].get("conviction_level", "Medium Conviction") if strategic_conviction and "details" in strategic_conviction else "Medium Conviction",
-                    "conviction_score": strategic_conviction["details"].get("overall_conviction_score", 50.0) if strategic_conviction and "details" in strategic_conviction else 50.0,
-                    "strategic_recommendation": strategic_conviction["details"].get("strategic_recommendation", "Hold") if strategic_conviction and "details" in strategic_conviction else "Hold",
+                    # Strategic Conviction Integration - PHASE 7 FIX
+                    "conviction_level": conviction_level,
+                    "conviction_score": conviction_score,
+                    "strategic_recommendation": strategic_recommendation,
+                    
+                    # PHASE 7: Institutional-Grade Risk Assessment
+                    "risk_assessment": risk_assessment,
                     
                     # Additional fields for frontend compatibility
                     "confidence_score": round(composite_score * 100, 1),
