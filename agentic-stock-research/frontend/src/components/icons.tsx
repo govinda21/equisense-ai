@@ -18,9 +18,7 @@ import {
   ArrowDownTrayIcon,
   ListBulletIcon,
   CommandLineIcon,
-  InformationCircleIcon,
-  BarChart3Icon,
-  LineChartIcon
+  InformationCircleIcon
 } from '@heroicons/react/24/outline'
 
 export const Icons = {
@@ -47,6 +45,6 @@ export const Icons = {
   AlertCircle: InformationCircleIcon, // Using InfoCircle as proxy for alert
   DollarSign: BanknotesIcon, // Using Banknotes as proxy for dollar
   Activity: ArrowTrendingUpIcon, // Using TrendingUp as proxy for activity
-  LineChart: LineChartIcon,
-  BarChart3: BarChart3Icon,
+  LineChart: PresentationChartLineIcon,
+  BarChart3: ChartBarIcon,
 }

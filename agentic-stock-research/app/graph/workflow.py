@@ -87,14 +87,21 @@ def build_research_graph(settings: AppSettings):
     graph.add_edge("filing_analysis", "cashflow")
     graph.add_edge("earnings_call_analysis", "cashflow")
     
-    # FINAL SEQUENCE: These need to run in order for synthesis
-    # Use conditional edges to prevent duplicate execution
+    # OPTIMIZED PARALLEL EXECUTION: Run independent analyses in parallel
+    # Leadership, sector_macro, and growth_prospects can run in parallel after cashflow
     graph.add_edge("cashflow", "leadership")
-    graph.add_edge("leadership", "sector_macro")
-    graph.add_edge("sector_macro", "growth_prospects")
+    graph.add_edge("cashflow", "sector_macro")
+    graph.add_edge("cashflow", "growth_prospects")
+    
+    # Valuation needs growth_prospects, but can run in parallel with leadership/sector_macro
     graph.add_edge("growth_prospects", "valuation")
+    
+    # Strategic conviction and sector rotation can run in parallel after valuation
     graph.add_edge("valuation", "strategic_conviction")
-    graph.add_edge("strategic_conviction", "sector_rotation")
+    graph.add_edge("valuation", "sector_rotation")
+    
+    # Both converge to synthesis (LangGraph waits for all dependencies)
+    graph.add_edge("strategic_conviction", "synthesis")
     graph.add_edge("sector_rotation", "synthesis")
     graph.add_edge("synthesis", END)
 

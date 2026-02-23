@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 from dataclasses import dataclass
-
+from app.monitoring.alert_engine import MarketEvent
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -77,20 +77,23 @@ class RealTimeDataProvider:
         """Get price from yfinance (works for NSE, BSE, and other exchanges)"""
         try:
             import yfinance as yf
-            
+
             def _fetch_price():
                 t = yf.Ticker(ticker)
                 info = t.info or {}
-                
+
+                # Log the fetched info for debugging
+                logger.debug(f"Fetched info for {ticker}: {info}")
+
                 # Get latest price from history
                 hist = t.history(period="1d", interval="1m")
                 latest_price = hist['Close'].iloc[-1] if len(hist) > 0 else info.get('currentPrice', 0)
-                
+
                 # Calculate change
                 prev_close = info.get('previousClose', latest_price)
                 change = latest_price - prev_close
                 change_percent = (change / prev_close * 100) if prev_close > 0 else 0
-                
+
                 return RealTimePrice(
                     ticker=ticker,
                     price=latest_price,
@@ -102,14 +105,14 @@ class RealTimeDataProvider:
                     high_52w=info.get('fiftyTwoWeekHigh', 0),
                     low_52w=info.get('fiftyTwoWeekLow', 0)
                 )
-            
+
             result = await asyncio.to_thread(_fetch_price)
-            logger.debug(f"Successfully fetched yfinance price for {ticker}")
+            logger.debug(f"Successfully fetched yfinance price for {ticker}: {result}")
             return result
-                        
+
         except Exception as e:
             logger.warning(f"yfinance API error for {ticker}: {e}")
-        
+
         return None
     
     async def get_options_chain(self, ticker: str) -> List[OptionsChain]:
@@ -253,3 +256,91 @@ async def get_realtime_provider() -> RealTimeDataProvider:
     if _realtime_provider is None:
         _realtime_provider = RealTimeDataProvider()
     return _realtime_provider
+
+from enum import Enum
+
+class MarketEvent(Enum):
+    PRICE_UPDATE = "price_update"
+    TECHNICAL_SIGNAL = "technical_signal"
+
+class EventTrigger:
+    """
+    Represents a trigger for market events based on specific conditions.
+    """
+
+    def __init__(self, event_type: str, condition: callable, priority: int = 5):
+        """
+        Initialize an EventTrigger.
+
+        :param event_type: Type of the event (e.g., "PRICE_UPDATE").
+        :param condition: A callable that evaluates whether the event is triggered.
+        :param priority: Priority of the trigger (higher means more important).
+        """
+        self.event_type = event_type
+        self.condition = condition
+        self.priority = priority
+
+    def check(self, data: dict) -> bool:
+        """
+        Check if the event is triggered based on the provided data.
+
+        :param data: Data to evaluate the condition.
+        :return: True if the event is triggered, False otherwise.
+        """
+        return self.condition(data)
+
+class EventDrivenAnalyzer:
+    def __init__(self):
+        self.triggers: List[EventTrigger] = []
+        self._setup_default_triggers()
+
+    def _setup_default_triggers(self):
+        # Basic price movement trigger
+        default_trigger = EventTrigger(
+            MarketEvent.PRICE_UPDATE,
+            lambda d: abs(d.get("change_percent", 0)) > 3.0,
+            priority=5
+        )
+        self.triggers.append(default_trigger)
+        self._sort_triggers()
+
+    def add_trigger(self, trigger: EventTrigger):
+        self.triggers.append(trigger)
+        self._sort_triggers()
+
+    def _sort_triggers(self):
+        self.triggers.sort(key=lambda t: t.priority, reverse=True)
+
+class MarketDataAggregator:
+    def __init__(self):
+        self.market_indicators = {}
+
+    async def update_market_context(self) -> dict:
+        vix = self.market_indicators.get("vix", 20)
+
+        # Determine volatility regime
+        if vix < 15:
+            regime = "low_volatility"
+        elif vix < 20:
+            regime = "normal"
+        elif vix < 30:
+            regime = "elevated_volatility"
+        else:
+            regime = "high_volatility"
+
+        # Determine market session (simple time-based logic)
+        now = datetime.utcnow().hour
+
+        if 13 <= now <= 20:
+            session = "regular"
+        elif 11 <= now < 13:
+            session = "pre_market"
+        elif 20 < now <= 23:
+            session = "after_hours"
+        else:
+            session = "closed"
+
+        return {
+            "regime": regime,
+            "session": session
+        }

@@ -4,7 +4,7 @@ from typing import List
 
 from app.config import AppSettings
 from app.graph.state import ResearchState
-from app.tools.nlp import sentiment_score, summarize_texts, _ollama_chat
+from app.tools.nlp import sentiment_score, summarize_texts, _ollama
 from app.tools.news import get_news_headlines_and_summaries, get_recent_news_summary
 from app.tools.valuepickr_scraper import analyze_valuepickr_sentiment
 import asyncio
@@ -36,7 +36,7 @@ Example:
 SENTIMENT: Positive
 RATIONALE: Strong earnings growth reported"""
 
-        response = await asyncio.to_thread(_ollama_chat, prompt)
+        response = await asyncio.to_thread(_ollama, prompt)
         
         if response:
             # Parse response

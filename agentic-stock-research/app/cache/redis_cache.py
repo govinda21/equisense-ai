@@ -163,6 +163,61 @@ class CacheManager:
             logger.error(f"Cache delete error for key {key}: {e}")
             return False
     
+    async def clear_all(self) -> bool:
+        """Clear all cache data (Redis and in-memory)"""
+        try:
+            cleared_count = 0
+            if self._use_redis and self.redis_client and self._connected:
+                # Flush all Redis keys
+                await self.redis_client.flushdb()
+                cleared_count = await self.redis_client.dbsize()
+                logger.info(f"Cleared all Redis cache data ({cleared_count} keys)")
+            
+            # Clear in-memory cache
+            memory_count = len(self._memory_cache)
+            self._memory_cache.clear()
+            cleared_count += memory_count
+            logger.info(f"Cleared in-memory cache ({memory_count} entries)")
+            
+            # Reset cache stats
+            self.cache_hits = 0
+            self.cache_misses = 0
+            
+            logger.info(f"✅ Cache cleared successfully: {cleared_count} total entries removed")
+            return True
+        except Exception as e:
+            logger.error(f"Cache clear error: {e}")
+            return False
+    
+    async def clear_ticker(self, ticker: str) -> bool:
+        """Clear all cache data for a specific ticker"""
+        try:
+            cleared_count = 0
+            if self._use_redis and self.redis_client and self._connected:
+                # Find and delete all keys for this ticker
+                pattern = f"*:{ticker}*"
+                keys = []
+                async for key in self.redis_client.scan_iter(match=pattern):
+                    keys.append(key)
+                
+                if keys:
+                    await self.redis_client.delete(*keys)
+                    cleared_count = len(keys)
+                    logger.info(f"[{ticker}] Cleared {cleared_count} Redis cache entries")
+            
+            # Clear in-memory cache for this ticker
+            memory_keys = [k for k in self._memory_cache.keys() if ticker in k]
+            for key in memory_keys:
+                del self._memory_cache[key]
+            cleared_count += len(memory_keys)
+            
+            if cleared_count > 0:
+                logger.info(f"[{ticker}] Cleared {cleared_count} total cache entries")
+            return True
+        except Exception as e:
+            logger.error(f"Cache clear error for {ticker}: {e}")
+            return False
+    
     async def exists(self, key: str) -> bool:
         """Check if key exists in cache"""
         try:
@@ -266,3 +321,13 @@ async def close_cache():
     if _cache_manager:
         await _cache_manager.disconnect()
         _cache_manager = None
+
+async def clear_all_cache():
+    """Clear all cache data"""
+    cache = await get_cache_manager()
+    return await cache.clear_all()
+
+async def clear_ticker_cache(ticker: str):
+    """Clear cache data for a specific ticker"""
+    cache = await get_cache_manager()
+    return await cache.clear_ticker(ticker)

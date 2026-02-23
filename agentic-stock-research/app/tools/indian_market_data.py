@@ -14,6 +14,7 @@ import httpx
 import pandas as pd
 from pathlib import Path
 import json
+import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -140,10 +141,15 @@ class IndianMarketDataProvider:
             logger.info(f"Fetching shareholding pattern for {symbol} using yfinance")
             
             # Use yfinance for basic company info
-            import yfinance as yf
-            
             def _fetch_shareholding():
-                ticker_symbol = f"{symbol}.NS" if exchange.upper() == "NSE" else f"{symbol}.BO"
+                exchange = (exchange or "").upper()
+                if symbol.endswith((".NS", ".BO")):
+                    ticker_symbol = symbol
+                elif exchange in {"NSE", "BSE"}:
+                    suffix = ".NS" if exchange == "NSE" else ".BO"
+                    ticker_symbol = f"{symbol}{suffix}"
+                else:
+                    ticker_symbol = symbol
                 t = yf.Ticker(ticker_symbol)
                 info = t.info or {}
                 
@@ -226,7 +232,14 @@ class IndianMarketDataProvider:
             import yfinance as yf
             
             def _fetch_corporate_actions():
-                ticker_symbol = f"{symbol}.NS" if exchange.upper() == "NSE" else f"{symbol}.BO"
+                exchange = (exchange or "").upper()
+                if symbol.endswith((".NS", ".BO")):
+                    ticker_symbol = symbol
+                elif exchange in {"NSE", "BSE"}:
+                    suffix = ".NS" if exchange == "NSE" else ".BO"
+                    ticker_symbol = f"{symbol}{suffix}"
+                else:
+                    ticker_symbol = symbol
                 t = yf.Ticker(ticker_symbol)
                 
                 actions = []
@@ -338,7 +351,14 @@ class IndianMarketDataProvider:
             import yfinance as yf
             
             def _fetch_financial_filings():
-                ticker_symbol = f"{symbol}.NS" if exchange.upper() == "NSE" else f"{symbol}.BO"
+                exchange = (exchange or "").upper()
+                if symbol.endswith((".NS", ".BO")):
+                    ticker_symbol = symbol
+                elif exchange in {"NSE", "BSE"}:
+                    suffix = ".NS" if exchange == "NSE" else ".BO"
+                    ticker_symbol = f"{symbol}{suffix}"
+                else:
+                    ticker_symbol = symbol
                 t = yf.Ticker(ticker_symbol)
                 
                 filings = []
@@ -611,33 +631,7 @@ class IndianMarketDataProvider:
 async def get_indian_market_data(symbol: str, exchange: str = "NSE") -> Dict[str, Any]:
     """
     Get comprehensive Indian market data for a symbol
-    
-    Now uses multi-source federation (v2) for improved data quality and coverage.
-    Falls back to legacy provider if v2 system fails.
     """
-    try:
-        # Try the new multi-source federation system first
-        from app.tools.indian_market_data_v2 import fetch_indian_market_data
-        
-        # Normalize ticker format (add .NS or .BO suffix if missing)
-        ticker = symbol
-        if not ticker.endswith((".NS", ".BO")):
-            ticker = f"{symbol}.{exchange[:2]}"  # NSE -> NS, BSE -> BO
-        
-        # Fetch from multi-source system
-        logger.info(f"Fetching Indian market data using multi-source federation for {ticker}")
-        federated_data = await fetch_indian_market_data(ticker)
-        
-        if federated_data and len(federated_data) > 0:
-            logger.info(f"Successfully fetched {len(federated_data)} fields from multi-source federation")
-            return federated_data
-        else:
-            logger.warning(f"Multi-source federation returned no data for {ticker}, falling back to legacy provider")
-    
-    except Exception as e:
-        logger.warning(f"Multi-source federation failed for {symbol}: {e}, falling back to legacy provider")
-    
-    # Fallback to legacy provider
     logger.info(f"Using legacy Indian market data provider for {symbol}")
     provider = IndianMarketDataProvider()
     return await provider.get_comprehensive_company_data(symbol, exchange)
@@ -648,8 +642,3 @@ async def get_current_risk_free_rate() -> float:
     provider = IndianMarketDataProvider()
     rate = await provider.get_risk_free_rate()
     return rate or 0.07  # Default fallback
-
-
-
-
-

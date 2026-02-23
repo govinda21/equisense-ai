@@ -14,22 +14,26 @@ async def sector_rotation_node(state: ResearchState, settings: AppSettings) -> R
     """
     ticker = state["tickers"][0]
     
+    # PHASE 4: State Isolation - Create local isolated state
+    from copy import deepcopy
+    local_state = deepcopy(state)
+    
     # Check if already executed to prevent duplicate runs
-    if "sector_rotation" in state.get("analysis", {}):
-        logger.info(f"SECTOR_ROTATION_NODE: Already executed for {ticker}, skipping")
-        return state
+    if "sector_rotation" in local_state.get("analysis", {}):
+        logger.info(f"[{ticker}] SECTOR_ROTATION_NODE: Already executed, skipping")
+        return local_state
     
     try:
-        logger.info(f"SECTOR_ROTATION_NODE: Starting sector rotation analysis for {ticker}")
-        logger.info(f"SECTOR_ROTATION_NODE: State keys: {list(state.keys())}")
+        logger.info(f"[{ticker}] SECTOR_ROTATION_NODE: Starting sector rotation analysis")
         
-        # Perform sector rotation analysis
+        # Perform sector rotation analysis (independent fetch per ticker)
         rotation_result = await analyze_sector_rotation(ticker, days_back=90)
+        logger.info(f"[{ticker}] Sector rotation analysis completed")
         
         if "error" in rotation_result:
-            logger.warning(f"Sector rotation analysis failed for {ticker}: {rotation_result['error']}")
+            logger.warning(f"[{ticker}] Sector rotation analysis failed: {rotation_result['error']}")
             # Set default neutral values
-            state.setdefault("analysis", {})["sector_rotation"] = {
+            local_state.setdefault("analysis", {})["sector_rotation"] = {
                 "ticker": ticker,
                 "error": rotation_result["error"],
                 "rotation_phase": "Uncertain Rotation",
@@ -38,10 +42,10 @@ async def sector_rotation_node(state: ResearchState, settings: AppSettings) -> R
                 "market_breadth": 0.5,
                 "confidence_score": 0.3
             }
-            state.setdefault("confidences", {})["sector_rotation"] = 0.3
+            local_state.setdefault("confidences", {})["sector_rotation"] = 0.3
         else:
             # Store successful analysis
-            state.setdefault("analysis", {})["sector_rotation"] = rotation_result
+            local_state.setdefault("analysis", {})["sector_rotation"] = rotation_result
             
             # Calculate confidence based on data quality and market breadth
             confidence = 0.7  # Base confidence
@@ -57,18 +61,18 @@ async def sector_rotation_node(state: ResearchState, settings: AppSettings) -> R
                 confidence -= 0.1
             
             confidence = min(0.9, max(0.1, confidence))
-            state.setdefault("confidences", {})["sector_rotation"] = confidence
+            local_state.setdefault("confidences", {})["sector_rotation"] = confidence
             
-            logger.info(f"SECTOR_ROTATION_NODE: Analysis completed for {ticker} "
+            logger.info(f"[{ticker}] SECTOR_ROTATION_NODE: Analysis completed "
                        f"(Phase: {rotation_result.get('rotation_patterns', {}).get('rotation_phase', 'Unknown')}, "
                        f"Outlook: {rotation_result.get('recommendations', {}).get('sector_outlook', 'Unknown')}, "
                        f"Signal: {rotation_result.get('recommendations', {}).get('rotation_signal', 'Unknown')})")
-            logger.info(f"SECTOR_ROTATION_NODE: Stored in state['analysis']['sector_rotation']")
         
-        return state
+        # PHASE 4: Return isolated state
+        return local_state
         
     except Exception as e:
-        logger.error(f"Sector rotation analysis failed for {ticker}: {e}")
-        state.setdefault("analysis", {})["sector_rotation"] = {"error": str(e)}
-        state.setdefault("confidences", {})["sector_rotation"] = 0.1
-        return state
+        logger.error(f"[{ticker}] Sector rotation analysis failed: {e}")
+        local_state.setdefault("analysis", {})["sector_rotation"] = {"error": str(e)}
+        local_state.setdefault("confidences", {})["sector_rotation"] = 0.1
+        return local_state

@@ -1,26 +1,12 @@
-"""
-BSE/NSE Filing Analysis System
-
-Implements comprehensive Indian regulatory filing analysis to match and exceed
-StockInsights.ai and Fiscal.ai capabilities for Indian markets.
-
-Features:
-- BSE/NSE annual report processing
-- Quarterly results (XBRL) parsing
-- Corporate announcements analysis
-- OCR for scanned PDFs
-- Filing change detection
-- Management commentary extraction
-"""
+"""BSE/NSE Filing Analysis System for Indian regulatory filings."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
 from enum import Enum
 
 import aiohttp
@@ -28,10 +14,8 @@ from bs4 import BeautifulSoup
 
 from app.cache.redis_cache import get_cache_manager
 
-# Initialize logger first before any try/except blocks
 logger = logging.getLogger(__name__)
 
-# Optional imports for PDF processing
 try:
     import PyPDF2
     import pytesseract
@@ -44,7 +28,6 @@ except ImportError:
 
 
 class FilingType(Enum):
-    """Types of Indian regulatory filings"""
     ANNUAL_REPORT = "annual_report"
     QUARTERLY_RESULTS = "quarterly_results"
     CORPORATE_ANNOUNCEMENT = "corporate_announcement"
@@ -55,492 +38,243 @@ class FilingType(Enum):
 
 @dataclass
 class IndianFiling:
-    """Indian regulatory filing data structure"""
     ticker: str
     filing_type: FilingType
     filing_date: datetime
     title: str
     url: str
-    exchange: str  # BSE or NSE
+    exchange: str
     content: Optional[str] = None
     summary: Optional[str] = None
-    key_metrics: Dict[str, Any] = None
+    key_metrics: Dict[str, Any] = field(default_factory=dict)
     management_commentary: Optional[str] = None
-    risk_factors: List[str] = None
+    risk_factors: List[str] = field(default_factory=list)
     filing_id: Optional[str] = None
-    
-    def __post_init__(self):
-        if self.key_metrics is None:
-            self.key_metrics = {}
-        if self.risk_factors is None:
-            self.risk_factors = []
 
 
-class BSEFilingAnalyzer:
-    """BSE filing analysis and extraction"""
-    
-    def __init__(self):
-        self.base_url = "https://www.bseindia.com"
-        self.cache = None  # Will be initialized async
-        self.session = None
-    
+_DATE_FORMATS = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]
+_SESSION_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+
+def _parse_filing_date(date_str: str) -> Optional[datetime]:
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _classify_filing_type(title: str) -> FilingType:
+    t = title.lower()
+    if "annual report" in t:
+        return FilingType.ANNUAL_REPORT
+    if any(k in t for k in ("quarterly", "q1", "q2", "q3", "q4")):
+        return FilingType.QUARTERLY_RESULTS
+    if any(k in t for k in ("board meeting", "board resolution")):
+        return FilingType.BOARD_MEETING
+    if any(k in t for k in ("insider", "promoter")):
+        return FilingType.INSIDER_TRADING
+    if any(k in t for k in ("shareholding", "holding pattern")):
+        return FilingType.SHAREHOLDING_PATTERN
+    return FilingType.CORPORATE_ANNOUNCEMENT
+
+
+class _ExchangeFilingAnalyzer:
+    """Base class for BSE/NSE filing fetchers."""
+
+    def __init__(self, base_url: str, exchange: str, cache_prefix: str):
+        self.base_url = base_url
+        self.exchange = exchange
+        self.cache_prefix = cache_prefix
+        self.cache = None
+        self.session: Optional[aiohttp.ClientSession] = None
+
     async def _ensure_cache(self):
-        """Lazily initialize cache"""
         if self.cache is None:
             self.cache = await get_cache_manager()
         return self.cache
-    
+
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session"""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=30),
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                }
+                headers=_SESSION_HEADERS,
             )
         return self.session
-    
+
     async def close(self):
-        """Close the aiohttp session"""
         if self.session and not self.session.closed:
             await self.session.close()
             self.session = None
-    
+
     async def get_company_filings(self, ticker: str, days_back: int = 90) -> List[IndianFiling]:
-        """
-        Get recent filings for a BSE-listed company
-        
-        Args:
-            ticker: Company ticker (e.g., 'RELIANCE')
-            days_back: Number of days to look back for filings
-            
-        Returns:
-            List of IndianFiling objects
-        """
-        cache_key = f"bse_filings:{ticker}:{days_back}"
-        
-        # Check cache first
+        cache_key = f"{self.cache_prefix}:{ticker}:{days_back}"
         cache = await self._ensure_cache()
-        cached_result = await cache.get(cache_key)
-        if cached_result:
-            logger.info(f"Retrieved BSE filings from cache for {ticker}")
-            return [IndianFiling(**filing) for filing in cached_result]
-        
+        cached = await cache.get(cache_key)
+        if cached:
+            logger.info(f"Retrieved {self.exchange} filings from cache for {ticker}")
+            return [IndianFiling(**f) for f in cached]
+
         try:
             session = await self._get_session()
-            
-            # BSE company search and filing retrieval
-            filings = await self._fetch_bse_filings(session, ticker, days_back)
-            
-            # Cache results for 2 hours
+            filings = await self._fetch_filings(session, ticker, days_back)
             cache = await self._ensure_cache()
-            await cache.set(cache_key, [filing.__dict__ for filing in filings], ttl=7200)
-            
-            logger.info(f"Retrieved {len(filings)} BSE filings for {ticker}")
+            await cache.set(cache_key, [f.__dict__ for f in filings], ttl=7200)
+            logger.info(f"Retrieved {len(filings)} {self.exchange} filings for {ticker}")
             return filings
-            
         except Exception as e:
-            logger.error(f"Error fetching BSE filings for {ticker}: {e}")
+            logger.error(f"Error fetching {self.exchange} filings for {ticker}: {e}")
             return []
-    
-    async def _fetch_bse_filings(self, session: aiohttp.ClientSession, ticker: str, days_back: int) -> List[IndianFiling]:
-        """Fetch filings from BSE website"""
+
+    async def _fetch_filings(self, session: aiohttp.ClientSession, ticker: str, days_back: int) -> List[IndianFiling]:
         filings = []
-        
         try:
-            # BSE corporate announcements URL
-            url = f"{self.base_url}/corporate/List_Scrips.aspx"
-            
-            # Rate limiting
             await asyncio.sleep(1.0)
-            
-            async with session.get(url) as response:
+            async with session.get(self._listings_url()) as response:
                 if response.status != 200:
-                    logger.warning(f"BSE returned {response.status} for {ticker}")
+                    logger.warning(f"{self.exchange} returned {response.status} for {ticker}")
                     return filings
-                
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Extract filing information from BSE page
-                # This is a simplified implementation - actual BSE structure may vary
-                filing_rows = soup.find_all('tr', class_='TTRow')
-                
-                for row in filing_rows[:20]:  # Limit to recent filings
+                soup = BeautifulSoup(await response.text(), "html.parser")
+                for row in soup.find_all("tr", class_="TTRow")[:20]:
                     try:
-                        cells = row.find_all('td')
-                        if len(cells) >= 4:
-                            filing_date_str = cells[0].get_text(strip=True)
-                            filing_title = cells[1].get_text(strip=True)
-                            filing_url = cells[2].find('a')['href'] if cells[2].find('a') else None
-                            
-                            if filing_url and filing_title:
-                                filing_date = self._parse_filing_date(filing_date_str)
-                                
-                                if filing_date and (datetime.now() - filing_date).days <= days_back:
-                                    filing_type = self._classify_filing_type(filing_title)
-                                    
-                                    filing = IndianFiling(
-                                        ticker=ticker,
-                                        filing_type=filing_type,
-                                        filing_date=filing_date,
-                                        title=filing_title,
-                                        url=f"{self.base_url}{filing_url}",
-                                        exchange="BSE"
-                                    )
-                                    
-                                    filings.append(filing)
-                    
+                        cells = row.find_all("td")
+                        if len(cells) < 4:
+                            continue
+                        title = cells[1].get_text(strip=True)
+                        link = cells[2].find("a")
+                        if not (link and title):
+                            continue
+                        filing_date = _parse_filing_date(cells[0].get_text(strip=True))
+                        if filing_date and (datetime.now() - filing_date).days <= days_back:
+                            filings.append(IndianFiling(
+                                ticker=ticker,
+                                filing_type=_classify_filing_type(title),
+                                filing_date=filing_date,
+                                title=title,
+                                url=f"{self.base_url}{link['href']}",
+                                exchange=self.exchange,
+                            ))
                     except Exception as e:
-                        logger.warning(f"Error parsing BSE filing row: {e}")
-                        continue
-        
+                        logger.warning(f"Error parsing {self.exchange} filing row: {e}")
         except Exception as e:
-            logger.error(f"Error fetching BSE filings: {e}")
-        
+            logger.error(f"Error fetching {self.exchange} filings: {e}")
         return filings
-    
-    def _parse_filing_date(self, date_str: str) -> Optional[datetime]:
-        """Parse filing date from various formats"""
-        try:
-            # Common BSE date formats
-            formats = [
-                "%d/%m/%Y",
-                "%d-%m-%Y", 
-                "%Y-%m-%d",
-                "%d %b %Y",
-                "%d %B %Y"
-            ]
-            
-            for fmt in formats:
-                try:
-                    return datetime.strptime(date_str, fmt)
-                except ValueError:
-                    continue
-            
-            return None
-            
-        except Exception:
-            return None
-    
-    def _classify_filing_type(self, title: str) -> FilingType:
-        """Classify filing type based on title"""
-        title_lower = title.lower()
-        
-        if any(keyword in title_lower for keyword in ['annual report', 'annual report']):
-            return FilingType.ANNUAL_REPORT
-        elif any(keyword in title_lower for keyword in ['quarterly', 'q1', 'q2', 'q3', 'q4']):
-            return FilingType.QUARTERLY_RESULTS
-        elif any(keyword in title_lower for keyword in ['board meeting', 'board resolution']):
-            return FilingType.BOARD_MEETING
-        elif any(keyword in title_lower for keyword in ['insider', 'promoter', 'shareholding']):
-            return FilingType.INSIDER_TRADING
-        elif any(keyword in title_lower for keyword in ['shareholding', 'holding pattern']):
-            return FilingType.SHAREHOLDING_PATTERN
-        else:
-            return FilingType.CORPORATE_ANNOUNCEMENT
+
+    def _listings_url(self) -> str:
+        raise NotImplementedError
 
 
-class NSEFilingAnalyzer:
-    """NSE filing analysis and extraction"""
-    
+class BSEFilingAnalyzer(_ExchangeFilingAnalyzer):
     def __init__(self):
-        self.base_url = "https://www.nseindia.com"
-        self.cache = None  # Will be initialized async
-        self.session = None
-    
-    async def _ensure_cache(self):
-        """Lazily initialize cache"""
-        if self.cache is None:
-            self.cache = await get_cache_manager()
-        return self.cache
-    
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session"""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                }
-            )
-        return self.session
-    
-    async def close(self):
-        """Close the aiohttp session"""
-        if self.session and not self.session.closed:
-            await self.session.close()
-            self.session = None
-    
-    async def get_company_filings(self, ticker: str, days_back: int = 90) -> List[IndianFiling]:
-        """
-        Get recent filings for an NSE-listed company
-        
-        Args:
-            ticker: Company ticker (e.g., 'RELIANCE')
-            days_back: Number of days to look back for filings
-            
-        Returns:
-            List of IndianFiling objects
-        """
-        cache_key = f"nse_filings:{ticker}:{days_back}"
-        
-        # Check cache first
-        cache = await self._ensure_cache()
-        cached_result = await cache.get(cache_key)
-        if cached_result:
-            logger.info(f"Retrieved NSE filings from cache for {ticker}")
-            return [IndianFiling(**filing) for filing in cached_result]
-        
-        try:
-            session = await self._get_session()
-            
-            # NSE corporate announcements retrieval
-            filings = await self._fetch_nse_filings(session, ticker, days_back)
-            
-            # Cache results for 2 hours
-            cache = await self._ensure_cache()
-            await cache.set(cache_key, [filing.__dict__ for filing in filings], ttl=7200)
-            
-            logger.info(f"Retrieved {len(filings)} NSE filings for {ticker}")
-            return filings
-            
-        except Exception as e:
-            logger.error(f"Error fetching NSE filings for {ticker}: {e}")
-            return []
-    
-    async def _fetch_nse_filings(self, session: aiohttp.ClientSession, ticker: str, days_back: int) -> List[IndianFiling]:
-        """Fetch filings from NSE website"""
-        filings = []
-        
-        try:
-            # NSE corporate announcements URL
-            url = f"{self.base_url}/corporates/corporateHome.html"
-            
-            # Rate limiting
-            await asyncio.sleep(1.0)
-            
-            async with session.get(url) as response:
-                if response.status != 200:
-                    logger.warning(f"NSE returned {response.status} for {ticker}")
-                    return filings
-                
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Extract filing information from NSE page
-                # This is a simplified implementation - actual NSE structure may vary
-                filing_rows = soup.find_all('tr', class_='TTRow')
-                
-                for row in filing_rows[:20]:  # Limit to recent filings
-                    try:
-                        cells = row.find_all('td')
-                        if len(cells) >= 4:
-                            filing_date_str = cells[0].get_text(strip=True)
-                            filing_title = cells[1].get_text(strip=True)
-                            filing_url = cells[2].find('a')['href'] if cells[2].find('a') else None
-                            
-                            if filing_url and filing_title:
-                                filing_date = self._parse_filing_date(filing_date_str)
-                                
-                                if filing_date and (datetime.now() - filing_date).days <= days_back:
-                                    filing_type = self._classify_filing_type(filing_title)
-                                    
-                                    filing = IndianFiling(
-                                        ticker=ticker,
-                                        filing_type=filing_type,
-                                        filing_date=filing_date,
-                                        title=filing_title,
-                                        url=f"{self.base_url}{filing_url}",
-                                        exchange="NSE"
-                                    )
-                                    
-                                    filings.append(filing)
-                    
-                    except Exception as e:
-                        logger.warning(f"Error parsing NSE filing row: {e}")
-                        continue
-        
-        except Exception as e:
-            logger.error(f"Error fetching NSE filings: {e}")
-        
-        return filings
-    
-    def _parse_filing_date(self, date_str: str) -> Optional[datetime]:
-        """Parse filing date from various formats"""
-        try:
-            # Common NSE date formats
-            formats = [
-                "%d/%m/%Y",
-                "%d-%m-%Y", 
-                "%Y-%m-%d",
-                "%d %b %Y",
-                "%d %B %Y"
-            ]
-            
-            for fmt in formats:
-                try:
-                    return datetime.strptime(date_str, fmt)
-                except ValueError:
-                    continue
-            
-            return None
-            
-        except Exception:
-            return None
-    
-    def _classify_filing_type(self, title: str) -> FilingType:
-        """Classify filing type based on title"""
-        title_lower = title.lower()
-        
-        if any(keyword in title_lower for keyword in ['annual report', 'annual report']):
-            return FilingType.ANNUAL_REPORT
-        elif any(keyword in title_lower for keyword in ['quarterly', 'q1', 'q2', 'q3', 'q4']):
-            return FilingType.QUARTERLY_RESULTS
-        elif any(keyword in title_lower for keyword in ['board meeting', 'board resolution']):
-            return FilingType.BOARD_MEETING
-        elif any(keyword in title_lower for keyword in ['insider', 'promoter', 'shareholding']):
-            return FilingType.INSIDER_TRADING
-        elif any(keyword in title_lower for keyword in ['shareholding', 'holding pattern']):
-            return FilingType.SHAREHOLDING_PATTERN
-        else:
-            return FilingType.CORPORATE_ANNOUNCEMENT
+        super().__init__("https://www.bseindia.com", "BSE", "bse_filings")
+
+    def _listings_url(self) -> str:
+        return f"{self.base_url}/corporate/List_Scrips.aspx"
+
+
+class NSEFilingAnalyzer(_ExchangeFilingAnalyzer):
+    def __init__(self):
+        super().__init__("https://www.nseindia.com", "NSE", "nse_filings")
+
+    def _listings_url(self) -> str:
+        return f"{self.base_url}/corporates/corporateHome.html"
 
 
 class IndianFilingAnalyzer:
-    """Main Indian filing analysis orchestrator"""
-    
+    """Main Indian filing analysis orchestrator (BSE + NSE)."""
+
     def __init__(self):
         self.bse_analyzer = BSEFilingAnalyzer()
         self.nse_analyzer = NSEFilingAnalyzer()
-        self.cache = None  # Will be initialized async
-    
+        self.cache = None
+
     async def _ensure_cache(self):
-        """Lazily initialize cache"""
         if self.cache is None:
             self.cache = await get_cache_manager()
         return self.cache
-    
+
     async def close(self):
-        """Close all analyzer sessions"""
         await self.bse_analyzer.close()
         await self.nse_analyzer.close()
-    
+
     async def analyze_company_filings(self, ticker: str, days_back: int = 90) -> Dict[str, Any]:
-        """
-        Analyze filings for an Indian company from both BSE and NSE
-        
-        Args:
-            ticker: Company ticker (e.g., 'RELIANCE')
-            days_back: Number of days to look back for filings
-            
-        Returns:
-            Comprehensive filing analysis
-        """
         cache_key = f"indian_filing_analysis:{ticker}:{days_back}"
-        
-        # Check cache first
         cache = await self._ensure_cache()
-        cached_result = await cache.get(cache_key)
-        if cached_result:
+        cached = await cache.get(cache_key)
+        if cached:
             logger.info(f"Retrieved Indian filing analysis from cache for {ticker}")
-            return cached_result
-        
+            return cached
+
         try:
-            # Fetch filings from both exchanges in parallel
-            bse_task = self.bse_analyzer.get_company_filings(ticker, days_back)
-            nse_task = self.nse_analyzer.get_company_filings(ticker, days_back)
-            
-            bse_filings, nse_filings = await asyncio.gather(bse_task, nse_task)
-            
-            # Combine and deduplicate filings
+            bse_filings, nse_filings = await asyncio.gather(
+                self.bse_analyzer.get_company_filings(ticker, days_back),
+                self.nse_analyzer.get_company_filings(ticker, days_back),
+            )
             all_filings = self._deduplicate_filings(bse_filings + nse_filings)
-            
-            # Analyze filings
-            analysis = await self._analyze_filings(all_filings)
-            
-            # Cache results for 4 hours
+            analysis = self._analyze_filings(all_filings)
             cache = await self._ensure_cache()
             await cache.set(cache_key, analysis, ttl=14400)
-            
             logger.info(f"Analyzed {len(all_filings)} Indian filings for {ticker}")
             return analysis
-            
         except Exception as e:
             logger.error(f"Error analyzing Indian filings for {ticker}: {e}")
             return {
-                "ticker": ticker,
-                "total_filings": 0,
-                "filing_summary": {},
-                "recent_developments": [],
-                "management_commentary": "",
-                "risk_factors": [],
-                "key_metrics": {},
-                "analysis_date": datetime.now().isoformat(),
-                "error": str(e)
+                "ticker": ticker, "total_filings": 0, "filing_summary": {},
+                "recent_developments": [], "management_commentary": "",
+                "risk_factors": [], "key_metrics": {},
+                "analysis_date": datetime.now().isoformat(), "error": str(e),
             }
-    
+
     def _deduplicate_filings(self, filings: List[IndianFiling]) -> List[IndianFiling]:
-        """Remove duplicate filings based on title and date"""
-        seen = set()
-        unique_filings = []
-        
-        for filing in filings:
-            # Create a key based on title and date
-            key = (filing.title.lower().strip(), filing.filing_date.date())
-            
+        seen, unique = set(), []
+        for f in filings:
+            key = (f.title.lower().strip(), f.filing_date.date())
             if key not in seen:
                 seen.add(key)
-                unique_filings.append(filing)
-        
-        # Sort by filing date (most recent first)
-        unique_filings.sort(key=lambda x: x.filing_date, reverse=True)
-        
-        return unique_filings
-    
-    async def _analyze_filings(self, filings: List[IndianFiling]) -> Dict[str, Any]:
-        """Analyze a list of filings and extract insights"""
+                unique.append(f)
+        return sorted(unique, key=lambda x: x.filing_date, reverse=True)
+
+    def _analyze_filings(self, filings: List[IndianFiling]) -> Dict[str, Any]:
         if not filings:
             return {
-                "total_filings": 0,
-                "filing_summary": {},
-                "recent_developments": [],
-                "management_commentary": "",
-                "risk_factors": [],
-                "key_metrics": {},
-                "analysis_date": datetime.now().isoformat()
+                "total_filings": 0, "filing_summary": {}, "recent_developments": [],
+                "management_commentary": "", "risk_factors": [], "key_metrics": {},
+                "analysis_date": datetime.now().isoformat(),
             }
-        
-        # Categorize filings by type
-        filing_summary = {}
-        for filing_type in FilingType:
-            filing_summary[filing_type.value] = len([
-                f for f in filings if f.filing_type == filing_type
-            ])
-        
-        # Extract recent developments (last 30 days)
+
+        filing_summary = {ft.value: sum(1 for f in filings if f.filing_type == ft) for ft in FilingType}
+
         recent_cutoff = datetime.now() - timedelta(days=30)
-        recent_filings = [f for f in filings if f.filing_date >= recent_cutoff]
-        
-        recent_developments = []
-        for filing in recent_filings[:10]:  # Top 10 recent filings
-            recent_developments.append({
-                "date": filing.filing_date.isoformat(),
-                "type": filing.filing_type.value,
-                "title": filing.title,
-                "exchange": filing.exchange
-            })
-        
-        # Extract management commentary from annual reports
-        management_commentary = self._extract_management_commentary(filings)
-        
-        # Extract risk factors
-        risk_factors = self._extract_risk_factors(filings)
-        
-        # Extract key metrics from quarterly results
-        key_metrics = self._extract_key_metrics(filings)
-        
+        recent_developments = [
+            {"date": f.filing_date.isoformat(), "type": f.filing_type.value,
+             "title": f.title, "exchange": f.exchange}
+            for f in filings if f.filing_date >= recent_cutoff
+        ][:10]
+
+        annual_count = sum(1 for f in filings if f.filing_type == FilingType.ANNUAL_REPORT)
+        management_commentary = (
+            f"Management commentary available from {annual_count} annual report(s). "
+            "Detailed extraction requires PDF processing."
+            if annual_count else "No annual reports available for management commentary extraction."
+        )
+
+        risk_filings = [f for f in filings if "risk" in f.title.lower()]
+        risk_factors = (
+            [f"{f.title} ({f.filing_date.strftime('%Y-%m-%d')})" for f in risk_filings[:5]]
+            or ["No specific risk factor filings identified in recent period."]
+        )
+
+        quarterly = [f for f in filings if f.filing_type == FilingType.QUARTERLY_RESULTS]
+        key_metrics = (
+            {
+                "quarterly_reports_count": len(quarterly),
+                "latest_quarter": quarterly[0].filing_date.isoformat(),
+                "message": "Detailed financial metrics extraction requires XBRL processing.",
+            }
+            if quarterly else {"message": "No quarterly results available for metric extraction."}
+        )
+
         return {
             "total_filings": len(filings),
             "filing_summary": filing_summary,
@@ -548,66 +282,14 @@ class IndianFilingAnalyzer:
             "management_commentary": management_commentary,
             "risk_factors": risk_factors,
             "key_metrics": key_metrics,
-            "analysis_date": datetime.now().isoformat()
-        }
-    
-    def _extract_management_commentary(self, filings: List[IndianFiling]) -> str:
-        """Extract management commentary from annual reports"""
-        annual_reports = [f for f in filings if f.filing_type == FilingType.ANNUAL_REPORT]
-        
-        if not annual_reports:
-            return "No annual reports available for management commentary extraction."
-        
-        # For now, return a placeholder - actual implementation would require
-        # PDF parsing and NLP extraction
-        return f"Management commentary available from {len(annual_reports)} annual report(s). Detailed extraction requires PDF processing."
-    
-    def _extract_risk_factors(self, filings: List[IndianFiling]) -> List[str]:
-        """Extract risk factors from filings"""
-        risk_factors = []
-        
-        # Look for risk-related filings
-        risk_filings = [f for f in filings if 'risk' in f.title.lower()]
-        
-        for filing in risk_filings[:5]:  # Top 5 risk-related filings
-            risk_factors.append(f"{filing.title} ({filing.filing_date.strftime('%Y-%m-%d')})")
-        
-        if not risk_factors:
-            risk_factors.append("No specific risk factor filings identified in recent period.")
-        
-        return risk_factors
-    
-    def _extract_key_metrics(self, filings: List[IndianFiling]) -> Dict[str, Any]:
-        """Extract key metrics from quarterly results"""
-        quarterly_filings = [f for f in filings if f.filing_type == FilingType.QUARTERLY_RESULTS]
-        
-        if not quarterly_filings:
-            return {"message": "No quarterly results available for metric extraction."}
-        
-        # For now, return a placeholder - actual implementation would require
-        # XBRL parsing and financial data extraction
-        return {
-            "quarterly_reports_count": len(quarterly_filings),
-            "latest_quarter": quarterly_filings[0].filing_date.isoformat() if quarterly_filings else None,
-            "message": "Detailed financial metrics extraction requires XBRL processing."
+            "analysis_date": datetime.now().isoformat(),
         }
 
 
-# Main function for integration
 async def analyze_indian_filings(ticker: str, days_back: int = 90) -> Dict[str, Any]:
-    """
-    Main function to analyze Indian regulatory filings
-    
-    Args:
-        ticker: Company ticker (e.g., 'RELIANCE')
-        days_back: Number of days to look back for filings
-        
-    Returns:
-        Comprehensive filing analysis
-    """
+    """Main entry point: analyze Indian regulatory filings from BSE and NSE."""
     analyzer = IndianFilingAnalyzer()
     try:
         return await analyzer.analyze_company_filings(ticker, days_back)
     finally:
-        # Ensure sessions are closed
         await analyzer.close()

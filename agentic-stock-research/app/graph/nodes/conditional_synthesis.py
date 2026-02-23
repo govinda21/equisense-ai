@@ -1,12 +1,8 @@
-"""
-Conditional Synthesis Node
-Phase 1: Core Investment Framework - Smart Synthesis Selection
-"""
-
+"""Conditional Synthesis Node - selects between institutional and standard synthesis."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from copy import deepcopy
 
 from app.config import AppSettings
 from app.graph.state import ResearchState
@@ -17,58 +13,22 @@ logger = logging.getLogger(__name__)
 
 
 async def conditional_synthesis_node(state: ResearchState, settings: AppSettings) -> ResearchState:
-    """
-    Conditional synthesis node that chooses between institutional and standard synthesis
-    
-    Uses institutional synthesis when:
-    - Analysis type is "institutional"
-    - Horizon filtering is requested
-    - Professional formatting is needed
-    
-    Falls back to standard synthesis for:
-    - Legacy compatibility
-    - Simple analysis requests
-    - Error recovery
-    """
-    logger.info("🚀 CONDITIONAL SYNTHESIS NODE - NEW CODE VERSION")
+    local_state = deepcopy(state)
+    ticker = local_state.get("tickers", [None])[0]
     try:
-        # Check if institutional analysis is requested
-        analysis_type = state.get("analysis_type", "standard")
-        horizon_short_days = state.get("horizon_short_days")
-        horizon_long_days = state.get("horizon_long_days")
-        
-        # Determine if institutional analysis should be used
-        use_institutional = (
-            analysis_type == "institutional" or
-            (horizon_short_days and horizon_long_days) or
-            state.get("include_charts", False) or
-            state.get("include_appendix", False)
-        )
-        
-        # TEMPORARY FIX: Always use standard synthesis until institutional synthesis is fixed
-        use_institutional = False
-        
-        if use_institutional:
-            logger.info("Using institutional synthesis for enhanced analysis")
-            return await institutional_synthesis(state, settings)
-        else:
-            logger.info("Using standard synthesis for legacy compatibility")
-            return await standard_synthesis(state, settings)
-            
+        # Always use standard synthesis (institutional synthesis disabled pending fix)
+        result = await standard_synthesis(local_state, settings)
+        return result
     except Exception as e:
-        logger.error(f"Error in conditional synthesis: {str(e)}")
-        logger.warning("Falling back to standard synthesis")
-        
-        # Fallback to standard synthesis
+        logger.error(f"[{ticker}] Synthesis failed: {e}, falling back to standard")
         try:
-            return await standard_synthesis(state, settings)
-        except Exception as fallback_error:
-            logger.error(f"Standard synthesis also failed: {str(fallback_error)}")
-            # Return minimal state to prevent complete failure
+            return await standard_synthesis(local_state, settings)
+        except Exception as fallback_err:
+            logger.error(f"[{ticker}] Fallback synthesis also failed: {fallback_err}")
             return {
-                **state,
+                **local_state,
                 "final_output": {
-                    "tickers": state.get("tickers", []),
+                    "tickers": local_state.get("tickers", []),
                     "reports": [],
                     "generated_at": "Error occurred during analysis",
                     "error": str(e)
@@ -76,5 +36,4 @@ async def conditional_synthesis_node(state: ResearchState, settings: AppSettings
             }
 
 
-# Export the conditional synthesis function
 synthesis_node = conditional_synthesis_node

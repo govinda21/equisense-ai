@@ -44,15 +44,44 @@ function AppContent({ chatOpen, currentView }: AppProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [errorType, setErrorType] = useState<'network' | 'server' | 'validation' | 'generic'>('generic')
-  const [data, setData] = useState<any | null>(null)
+  // Load persisted data from sessionStorage on mount
+  const [data, setData] = useState<any | null>(() => {
+    try {
+      const saved = sessionStorage.getItem('analysis_data')
+      return saved ? JSON.parse(saved) : null
+    } catch {
+      return null
+    }
+  })
   const [latency, setLatency] = useState<number | null>(null)
   const [analysisProgress, setAnalysisProgress] = useState(0)
   
-  // Bulk analysis state
+  // Bulk analysis state - load from sessionStorage
   const [bulkLoading, setBulkLoading] = useState(false)
-  const [rankedStocks, setRankedStocks] = useState<any[]>([])
-  const [bulkMode, setBulkMode] = useState<'buy' | 'sell'>('buy')
-  const [totalStocks, setTotalStocks] = useState(0)
+  const [rankedStocks, setRankedStocks] = useState<any[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('bulk_analysis_data')
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
+  const [bulkMode, setBulkMode] = useState<'buy' | 'sell'>(() => {
+    try {
+      const saved = sessionStorage.getItem('bulk_analysis_mode')
+      return (saved as 'buy' | 'sell') || 'buy'
+    } catch {
+      return 'buy'
+    }
+  })
+  const [totalStocks, setTotalStocks] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('bulk_total_stocks')
+      return saved ? parseInt(saved, 10) : 0
+    } catch {
+      return 0
+    }
+  })
   
   const toast = useToastHelpers()
   const countriesFetched = useRef(false)
@@ -176,7 +205,13 @@ function AppContent({ chatOpen, currentView }: AppProps) {
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault()
     setError(null)
+    // Only clear data when starting a new analysis (not on component re-render)
     setData(null)
+    try {
+      sessionStorage.removeItem('analysis_data')
+    } catch (err) {
+      console.warn('Failed to clear persisted analysis data:', err)
+    }
     setAnalysisProgress(0)
     
     // Validation
@@ -200,11 +235,13 @@ function AppContent({ chatOpen, currentView }: AppProps) {
     setLoading(true)
     const start = performance.now()
     
-    // Simulate progress for better UX
+    // Simulate realistic progress for better UX (0-90% during analysis, 100% on completion)
     const progressInterval = setInterval(() => {
       setAnalysisProgress(prev => {
         if (prev >= 90) return prev
-        return prev + Math.random() * 10
+        // Increment by 5-15% per second, slowing down as we approach 90%
+        const increment = prev < 30 ? 15 : prev < 60 ? 10 : 5
+        return Math.min(90, prev + increment)
       })
     }, 1000)
     
@@ -249,6 +286,12 @@ function AppContent({ chatOpen, currentView }: AppProps) {
       
       setAnalysisProgress(100)
       setData(j)
+      // Persist data to sessionStorage to prevent loss on re-render/page visibility changes
+      try {
+        sessionStorage.setItem('analysis_data', JSON.stringify(j))
+      } catch (err) {
+        console.warn('Failed to persist analysis data to sessionStorage:', err)
+      }
       toast.success(
         `Analysis completed for ${parsed.join(', ')} in ${Math.round(performance.now() - start)}ms`,
         'Analysis Complete'
@@ -353,7 +396,15 @@ function AppContent({ chatOpen, currentView }: AppProps) {
     console.log('Starting bulk analysis:', { tickerList, mode })
     setBulkLoading(true)
     setBulkMode(mode)
+    // Clear persisted bulk data when starting new analysis
     setRankedStocks([])
+    try {
+      sessionStorage.removeItem('bulk_analysis_data')
+      sessionStorage.setItem('bulk_analysis_mode', mode)
+      sessionStorage.setItem('bulk_total_stocks', tickerList.length.toString())
+    } catch (err) {
+      console.warn('Failed to clear persisted bulk analysis data:', err)
+    }
     setTotalStocks(tickerList.length)  // Set total stocks count
     
     try {
@@ -463,6 +514,14 @@ function AppContent({ chatOpen, currentView }: AppProps) {
             
             // Update UI with current results
             setRankedStocks(sorted)
+            // Persist bulk analysis data to sessionStorage
+            try {
+              sessionStorage.setItem('bulk_analysis_data', JSON.stringify(sorted))
+              sessionStorage.setItem('bulk_analysis_mode', mode)
+              sessionStorage.setItem('bulk_total_stocks', tickerList.length.toString())
+            } catch (err) {
+              console.warn('Failed to persist bulk analysis data:', err)
+            }
             toast.info(
               `✓ ${completedCount}/${tickerList.length} stocks analyzed - ${result.ticker} complete`,
               'Progress',
@@ -520,6 +579,16 @@ function AppContent({ chatOpen, currentView }: AppProps) {
       toast.error(err.message || 'Bulk analysis failed', 'Error')
     } finally {
       setBulkLoading(false)
+      // Persist final bulk analysis data
+      try {
+        if (rankedStocks.length > 0) {
+          sessionStorage.setItem('bulk_analysis_data', JSON.stringify(rankedStocks))
+          sessionStorage.setItem('bulk_analysis_mode', bulkMode)
+          sessionStorage.setItem('bulk_total_stocks', totalStocks.toString())
+        }
+      } catch (err) {
+        console.warn('Failed to persist final bulk analysis data:', err)
+      }
     }
   }
 
@@ -617,7 +686,17 @@ function AppContent({ chatOpen, currentView }: AppProps) {
                     <button 
                       type="button" 
                       className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50 transition-colors" 
-                      onClick={() => { setTickers(''); setData(null); setError(null); }}
+                      onClick={() => { 
+                        setTickers('')
+                        setData(null)
+                        setError(null)
+                        // Clear persisted data when user clicks Clear
+                        try {
+                          sessionStorage.removeItem('analysis_data')
+                        } catch (err) {
+                          console.warn('Failed to clear persisted analysis data:', err)
+                        }
+                      }}
                       disabled={loading}
                     >
                       Clear
@@ -625,16 +704,16 @@ function AppContent({ chatOpen, currentView }: AppProps) {
                   </div>
                 </form>
                 
-                {/* Progress Bar */}
+                {/* Progress Bar - Show % completion for single analysis */}
                 {loading && analysisProgress > 0 && (
                   <div className="mt-4">
                     <ProgressBar 
                       progress={analysisProgress} 
                       className="mb-2" 
-                      showPercentage={false}
+                      showPercentage={true}
                     />
-                    <p className="text-sm text-gray-600 text-center">
-                      Analyzing {tickers.split(',').map(t => t.trim()).join(', ')}...
+                    <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
+                      Analyzing {tickers.split(',').map(t => t.trim()).join(', ')}... {Math.round(analysisProgress)}% complete
                     </p>
                   </div>
                 )}
@@ -686,13 +765,13 @@ function AppContent({ chatOpen, currentView }: AppProps) {
                     loading={bulkLoading}
                   />
                   
-                  {/* Progress Status Bar */}
-                  {bulkLoading && rankedStocks.length > 0 && totalStocks > 0 && (
+                  {/* Progress Status Bar - Show number of shares completed for bulk analysis */}
+                  {bulkLoading && totalStocks > 0 && (
                     <div className="card p-4 mb-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center space-x-3">
-                          <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
-                            <span className="text-white font-bold text-sm">
+                          <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center">
+                            <span className="text-white font-bold">
                               {rankedStocks.length}
                             </span>
                           </div>
@@ -701,7 +780,7 @@ function AppContent({ chatOpen, currentView }: AppProps) {
                               Analysis in Progress
                             </h3>
                             <p className="text-xs text-blue-700 dark:text-blue-300">
-                              {rankedStocks.length}/{totalStocks} stock(s) analyzed
+                              {rankedStocks.length} of {totalStocks} stock(s) analyzed ({Math.round((rankedStocks.length / totalStocks) * 100)}%)
                             </p>
                           </div>
                         </div>

@@ -310,7 +310,7 @@ RETURN: [X.X]%"""
 
 LLM call (Ollama) and preview logging:
 ```365:373:/Users/govindak/workspace/EquiSense_AI/agentic-stock-research/app/graph/nodes/synthesis.py
-    llm_response = await asyncio.to_thread(_ollama_chat, analysis_prompt)
+    llm_response = await asyncio.to_thread(_ollama, analysis_prompt)
     if llm_response:
         logger.info(f"LLM response length: {len(llm_response)} chars")
         logger.info(f"LLM response preview: {llm_response[:500]}...")

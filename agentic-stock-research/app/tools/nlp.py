@@ -1,124 +1,119 @@
+"""
+NLP utilities: text summarization and sentiment scoring.
+Uses Ollama (if configured) → HuggingFace transformers → plain-text fallback.
+"""
 from __future__ import annotations
 
-from typing import List
-import json
+import asyncio
 import http.client
+import json
+from typing import List
 from urllib.parse import urlparse
 
 from app.config import get_settings
 
 try:
-    from transformers import pipeline  # type: ignore
+    from transformers import pipeline as hf_pipeline  # type: ignore
 except Exception:
-    pipeline = None  # type: ignore
+    hf_pipeline = None
 
 
-def _ollama_chat(prompt: str) -> str:
-    settings = get_settings()
-    if settings.llm_provider.lower() != "ollama":
+# ---------- Ollama helper ----------
+
+def _ollama(prompt: str) -> str:
+    """Send a prompt to a local Ollama server; return raw text or empty string."""
+    s = get_settings()
+    if s.llm_provider.lower() != "ollama":
         return ""
     try:
-        u = urlparse(settings.ollama_base_url)
+        u = urlparse(s.ollama_base_url)
         conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=30)
         body = json.dumps({
-            "model": settings.ollama_model, 
-            "prompt": prompt, 
-            "stream": False,
-            "options": {
-                "num_predict": 1000,  # Limit response length
-                "temperature": 0.1,   # More deterministic
-                "top_p": 0.9
-            }
+            "model": s.ollama_model, "prompt": prompt, "stream": False,
+            "options": {"num_predict": 1000, "temperature": 0.1, "top_p": 0.9},
         })
-        conn.request("POST", "/api/generate", body, headers={"Content-Type": "application/json"})
+        conn.request("POST", "/api/generate", body, {"Content-Type": "application/json"})
         resp = conn.getresponse()
-        
-        if resp.status != 200:
-            print(f"Ollama API error: {resp.status} - {resp.reason}")
+        if resp.status_code != 200:
             return ""
-            
-        # Get non-streaming response
-        content = resp.read().decode("utf-8")
+        content = resp.read().decode()
+        # Handle both single-object and streaming-line responses
         try:
-            # Parse single JSON response
-            data = json.loads(content)
-            return data.get("response", "")
+            return json.loads(content).get("response", "")
         except Exception:
-            # If streaming response, parse each line and combine
-            lines = content.strip().split('\n')
-            full_response = ""
-            for line in lines:
-                try:
-                    chunk = json.loads(line)
-                    if "response" in chunk:
-                        full_response += chunk["response"]
-                except Exception:
-                    continue
-            return full_response if full_response else content
+            return "".join(
+                chunk.get("response", "")
+                for line in content.strip().split("\n")
+                for chunk in [json.loads(line)]
+                if "response" in chunk
+            )
     except ConnectionRefusedError:
-        print("Ollama connection refused - Ollama server not running")
         return ""
     except Exception as e:
         print(f"Ollama error: {e}")
         return ""
 
 
+# ---------- public functions ----------
+
 async def summarize_texts(texts: List[str], max_words: int = 120) -> str:
+    """
+    Summarise a list of headlines/text snippets into one paragraph.
+    Falls back: Ollama → BART → join with semicolons.
+    """
     if not texts:
         return ""
-    # Prefer Ollama if configured (offload blocking IO)
-    import asyncio
-    res = await asyncio.to_thread(
-        _ollama_chat,
-        "Summarize the following bullet list of finance headlines in one paragraph, reflecting the overall sentiment:\n- "
-        + "\n- ".join(texts),
-    )
-    if res:
-        return res[: max_words * 6]
-    if pipeline is None:
-        return "; ".join(texts)[: max_words * 6]
-    import asyncio
 
-    def _summ() -> str:
+    prompt = ("Summarize the following bullet list of finance headlines in one paragraph, "
+              "reflecting the overall sentiment:\n- " + "\n- ".join(texts))
+    result = await asyncio.to_thread(_ollama, prompt)
+    if result:
+        return result[:max_words * 6]
+
+    if hf_pipeline is None:
+        return "; ".join(texts)[:max_words * 6]
+
+    def _bart() -> str:
         try:
-            summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-            res = summarizer("\n".join(texts), max_length=180, min_length=60, do_sample=False)
-            return res[0]["summary_text"]
+            summarizer = hf_pipeline("summarization", model="facebook/bart-large-cnn")
+            out = summarizer("\n".join(texts), max_length=180, min_length=60, do_sample=False)
+            return out[0]["summary_text"]
         except Exception:
-            return "; ".join(texts)[: max_words * 6]
+            return "; ".join(texts)[:max_words * 6]
 
-    return await asyncio.to_thread(_summ)
+    return await asyncio.to_thread(_bart)
 
 
 async def sentiment_score(texts: List[str]) -> float:
+    """
+    Return a 0–1 sentiment score for a list of text snippets (0 = negative, 1 = positive).
+    Falls back: Ollama → RoBERTa → 0.5 neutral.
+    """
     if not texts:
         return 0.5
-    # Try Ollama first: ask for a 0-1 normalized score (offload blocking IO)
-    import asyncio
-    res = await asyncio.to_thread(
-        _ollama_chat,
-        "On a scale from 0 (very negative) to 1 (very positive), provide a single numeric sentiment score for: "
-        + "; ".join(texts)
-        + ". Only return the number.",
-    )
-    if res:
+
+    prompt = ("On a scale from 0 (very negative) to 1 (very positive), provide a single "
+              "numeric sentiment score for: " + "; ".join(texts) + ". Only return the number.")
+    result = await asyncio.to_thread(_ollama, prompt)
+    if result:
         try:
-            val = float(res.strip().split()[0])
-            return max(0.0, min(1.0, val))
+            return max(0.0, min(1.0, float(result.strip().split()[0])))
         except Exception:
             pass
-    if pipeline is None:
-        return 0.5
-    import asyncio
 
-    def _sent() -> float:
+    if hf_pipeline is None:
+        return 0.5
+
+    def _roberta() -> float:
         try:
-            clf = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
-            results = clf(texts)
-            scores = [r.get("score", 0.5) * (1 if r.get("label", "POSITIVE").upper().startswith("POS") else -1) for r in results]
-            val = (sum(scores) / max(len(scores), 1) + 1.0) / 2.0
-            return max(0.0, min(1.0, val))
+            clf = hf_pipeline("sentiment-analysis",
+                               model="cardiffnlp/twitter-roberta-base-sentiment-latest")
+            scores = [
+                r["score"] * (1 if r.get("label", "").upper().startswith("POS") else -1)
+                for r in clf(texts)
+            ]
+            return max(0.0, min(1.0, (sum(scores) / len(scores) + 1.0) / 2.0))
         except Exception:
             return 0.5
 
-    return await asyncio.to_thread(_sent)
+    return await asyncio.to_thread(_roberta)

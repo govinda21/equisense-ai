@@ -1,190 +1,91 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 
-// Types
 interface User {
-  id: string;
-  email: string;
-  username: string;
-  full_name: string;
-  created_at: string;
-  last_login?: string;
-  is_premium: boolean;
+  id: string; email: string; username: string; full_name: string;
+  created_at: string; last_login?: string; is_premium: boolean;
 }
 
 interface AuthContextType {
-  user: User | null;
-  token: string | null;
+  user: User | null; token: string | null;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, username: string, fullName: string, password: string) => Promise<void>;
-  logout: () => void;
-  loading: boolean;
-  error: string | null;
+  logout: () => void; loading: boolean; error: string | null;
 }
 
-// Context
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Auth Provider
+const authFetch = async (url: string, body: object) => {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || `${url} failed`)
+  return data
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const applyAuth = (token: string, user: User) => {
+    setToken(token); setUser(user); localStorage.setItem('auth_token', token)
+  }
+  const clearAuth = () => {
+    setUser(null); setToken(null); localStorage.removeItem('auth_token'); setError(null)
+  }
 
   useEffect(() => {
-    // Check for stored token on mount
-    const storedToken = localStorage.getItem('auth_token');
-    if (storedToken) {
-      setToken(storedToken);
-      fetchUserProfile(storedToken);
-    } else {
-      setLoading(false);
-    }
-  }, []);
+    const storedToken = localStorage.getItem('auth_token')
+    if (!storedToken) { setLoading(false); return }
+    setToken(storedToken)
+    fetch('/auth/me', { headers: { 'Authorization': `Bearer ${storedToken}`, 'Content-Type': 'application/json' } })
+      .then(res => res.ok ? res.json() : Promise.reject())
+      .then(setUser)
+      .catch(clearAuth)
+      .finally(() => setLoading(false))
+  }, [])
 
-  const fetchUserProfile = async (authToken: string) => {
-    try {
-      const response = await fetch('/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
-      } else {
-        // Token is invalid, remove it
-        localStorage.removeItem('auth_token');
-        setToken(null);
-      }
-    } catch (err) {
-      console.error('Error fetching user profile:', err);
-      localStorage.removeItem('auth_token');
-      setToken(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const login = async (email: string, password: string) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch('/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email, password })
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setToken(data.access_token);
-        setUser(data.user);
-        localStorage.setItem('auth_token', data.access_token);
-      } else {
-        throw new Error(data.detail || 'Login failed');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed');
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const register = async (email: string, username: string, fullName: string, password: string) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch('/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email, username, full_name: fullName, password })
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setToken(data.access_token);
-        setUser(data.user);
-        localStorage.setItem('auth_token', data.access_token);
-      } else {
-        throw new Error(data.detail || 'Registration failed');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Registration failed');
-      throw err;
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const logout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('auth_token');
-    setError(null);
-  };
-
-  const value: AuthContextType = {
-    user,
-    token,
-    login,
-    register,
-    logout,
-    loading,
-    error
-  };
-
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-// Hook to use auth context
-export const useAuth = (): AuthContextType => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+  const withLoading = async (fn: () => Promise<void>) => {
+    setLoading(true); setError(null)
+    try { await fn() } catch (err) { setError(err instanceof Error ? err.message : 'Failed'); throw err }
+    finally { setLoading(false) }
   }
-  return context;
-};
 
-// Login Component
+  const login = (email: string, password: string) =>
+    withLoading(async () => { const d = await authFetch('/auth/login', { email, password }); applyAuth(d.access_token, d.user) })
+
+  const register = (email: string, username: string, fullName: string, password: string) =>
+    withLoading(async () => { const d = await authFetch('/auth/register', { email, username, full_name: fullName, password }); applyAuth(d.access_token, d.user) })
+
+  return <AuthContext.Provider value={{ user, token, login, register, logout: clearAuth, loading, error }}>{children}</AuthContext.Provider>
+}
+
+export const useAuth = (): AuthContextType => {
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error('useAuth must be used within an AuthProvider')
+  return ctx
+}
+
 export const LoginForm: React.FC = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isLogin, setIsLogin] = useState(true);
-  const [username, setUsername] = useState('');
-  const [fullName, setFullName] = useState('');
-  const { login, register, loading, error } = useAuth();
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isLogin, setIsLogin] = useState(true)
+  const [username, setUsername] = useState('')
+  const [fullName, setFullName] = useState('')
+  const { login, register, loading, error } = useAuth()
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    try {
-      if (isLogin) {
-        // For login, use email field as both email and username
-        await login(email, password);
-      } else {
-        await register(email, username, fullName, password);
-      }
-      // Navigation will be handled by the parent component
-    } catch (err) {
-      // Error is handled by the auth context
-    }
-  };
+    e.preventDefault()
+    try { isLogin ? await login(email, password) : await register(email, username, fullName, password) } catch {}
+  }
+
+  const inputCls = "mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+  const Field = ({ id, label, type = 'text', value, onChange, placeholder }: any) => (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-gray-700">{label}</label>
+      <input id={id} name={id} type={type} required value={value} onChange={(e: any) => onChange(e.target.value)} className={inputCls} placeholder={placeholder} />
+    </div>
+  )
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -194,184 +95,55 @@ export const LoginForm: React.FC = () => {
             {isLogin ? 'Sign in to your account' : 'Create your account'}
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            {isLogin ? (
-              <>
-                Or{' '}
-                <button
-                  onClick={() => setIsLogin(false)}
-                  className="font-medium text-blue-600 hover:text-blue-500"
-                >
-                  create a new account
-                </button>
-              </>
-            ) : (
-              <>
-                Or{' '}
-                <button
-                  onClick={() => setIsLogin(true)}
-                  className="font-medium text-blue-600 hover:text-blue-500"
-                >
-                  sign in to existing account
-                </button>
-              </>
-            )}
+            Or{' '}
+            <button onClick={() => setIsLogin(!isLogin)} className="font-medium text-blue-600 hover:text-blue-500">
+              {isLogin ? 'create a new account' : 'sign in to existing account'}
+            </button>
           </p>
         </div>
-        
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md">
-              {error}
-            </div>
-          )}
-          
+          {error && <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md">{error}</div>}
           <div className="space-y-4">
-            {!isLogin && (
-              <>
-                <div>
-                  <label htmlFor="fullName" className="block text-sm font-medium text-gray-700">
-                    Full Name
-                  </label>
-                  <input
-                    id="fullName"
-                    name="fullName"
-                    type="text"
-                    required={!isLogin}
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                    placeholder="Enter your full name"
-                  />
-                </div>
-                
-                <div>
-                  <label htmlFor="username" className="block text-sm font-medium text-gray-700">
-                    Username
-                  </label>
-                  <input
-                    id="username"
-                    name="username"
-                    type="text"
-                    required={!isLogin}
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                    placeholder="Choose a username"
-                  />
-                </div>
-              </>
-            )}
-            
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                {isLogin ? 'Email or Username' : 'Email Address'}
-              </label>
-              <input
-                id="email"
-                name="email"
-                type={isLogin ? "text" : "email"}
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder={isLogin ? "Enter your email or username" : "Enter your email"}
-              />
-            </div>
-            
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder="Enter your password"
-              />
-            </div>
+            {!isLogin && <>
+              <Field id="fullName" label="Full Name" value={fullName} onChange={setFullName} placeholder="Enter your full name" />
+              <Field id="username" label="Username" value={username} onChange={setUsername} placeholder="Choose a username" />
+            </>}
+            <Field id="email" label={isLogin ? 'Email or Username' : 'Email Address'} type={isLogin ? 'text' : 'email'} value={email} onChange={setEmail} placeholder={isLogin ? 'Enter your email or username' : 'Enter your email'} />
+            <Field id="password" label="Password" type="password" value={password} onChange={setPassword} placeholder="Enter your password" />
           </div>
-
-          <div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? (
-                <div className="flex items-center">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  {isLogin ? 'Signing in...' : 'Creating account...'}
-                </div>
-              ) : (
-                isLogin ? 'Sign in' : 'Create account'
-              )}
-            </button>
-          </div>
+          <button type="submit" disabled={loading}
+            className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
+            {loading
+              ? <div className="flex items-center"><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />{isLogin ? 'Signing in...' : 'Creating account...'}</div>
+              : isLogin ? 'Sign in' : 'Create account'}
+          </button>
         </form>
       </div>
     </div>
-  );
-};
+  )
+}
 
-// Protected Route Component
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, loading } = useAuth();
+  const { user, loading } = useAuth()
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500" /></div>
+  if (!user) return <LoginForm />
+  return <>{children}</>
+}
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginForm />;
-  }
-
-  return <>{children}</>;
-};
-
-// User Profile Component
 export const UserProfile: React.FC = () => {
-  const { user, logout } = useAuth();
-  const [preferences, setPreferences] = useState<any>(null);
-  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const { user, logout } = useAuth()
+  const [preferences, setPreferences] = useState<any>(null)
+  const [watchlist, setWatchlist] = useState<string[]>([])
 
   useEffect(() => {
-    if (user) {
-      fetchUserData();
-    }
-  }, [user]);
+    if (!user) return
+    Promise.all([fetch('/auth/preferences'), fetch('/auth/watchlist')]).then(async ([prefsRes, watchRes]) => {
+      if (prefsRes.ok) setPreferences(await prefsRes.json())
+      if (watchRes.ok) setWatchlist((await watchRes.json()).watchlist || [])
+    }).catch(console.error)
+  }, [user])
 
-  const fetchUserData = async () => {
-    try {
-      const [prefsResponse, watchlistResponse] = await Promise.all([
-        fetch('/auth/preferences'),
-        fetch('/auth/watchlist')
-      ]);
-
-      if (prefsResponse.ok) {
-        const prefs = await prefsResponse.json();
-        setPreferences(prefs);
-      }
-
-      if (watchlistResponse.ok) {
-        const watchlistData = await watchlistResponse.json();
-        setWatchlist(watchlistData.watchlist || []);
-      }
-    } catch (error) {
-      console.error('Error fetching user data:', error);
-    }
-  };
-
-  if (!user) return null;
+  if (!user) return null
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
@@ -381,16 +153,9 @@ export const UserProfile: React.FC = () => {
           <p className="text-gray-600">@{user.username}</p>
           <p className="text-sm text-gray-500">{user.email}</p>
         </div>
-        <button
-          onClick={logout}
-          className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
-        >
-          Logout
-        </button>
+        <button onClick={logout} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors">Logout</button>
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Preferences */}
         <div>
           <h3 className="text-lg font-semibold mb-3">Preferences</h3>
           {preferences && (
@@ -402,23 +167,15 @@ export const UserProfile: React.FC = () => {
             </div>
           )}
         </div>
-
-        {/* Watchlist */}
         <div>
           <h3 className="text-lg font-semibold mb-3">Watchlist ({watchlist.length})</h3>
           <div className="space-y-1">
-            {watchlist.length > 0 ? (
-              watchlist.map((ticker) => (
-                <div key={ticker} className="text-sm text-gray-700">
-                  {ticker}
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-gray-500">No stocks in watchlist</p>
-            )}
+            {watchlist.length > 0
+              ? watchlist.map(t => <div key={t} className="text-sm text-gray-700">{t}</div>)
+              : <p className="text-sm text-gray-500">No stocks in watchlist</p>}
           </div>
         </div>
       </div>
     </div>
-  );
-};
+  )
+}

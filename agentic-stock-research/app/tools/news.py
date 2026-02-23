@@ -1,424 +1,221 @@
+"""
+Multi-source financial news fetcher.
+Priority: Yahoo Finance → Indian RSS feeds (.NS tickers) → Google News RSS.
+All sources are de-duplicated and filtered for ticker relevance.
+"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
 import asyncio
 import logging
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
 import httpx
-from datetime import datetime, timedelta
 import yfinance as yf
 
 from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
+# Company-name keywords per ticker for relevance filtering
+_TICKER_KEYWORDS: Dict[str, List[str]] = {
+    "AAPL": ["apple", "iphone", "ipad", "mac", "tim cook"],
+    "MSFT": ["microsoft", "windows", "azure", "office", "satya nadella"],
+    "GOOGL": ["google", "alphabet", "android", "youtube", "pichai"],
+    "AMZN": ["amazon", "aws", "prime", "bezos", "andy jassy"],
+    "TSLA": ["tesla", "elon musk", "electric vehicle", "model"],
+    "META": ["meta", "facebook", "instagram", "whatsapp", "zuckerberg"],
+    "NVDA": ["nvidia", "gpu", "jensen huang", "graphics"],
+    "NFLX": ["netflix", "streaming"],
+    "RELIANCE": ["reliance", "jio", "mukesh ambani"],
+}
+_MAJOR_TICKERS = {"AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "NFLX"}
+_INCLUSIVE_TERMS = ["growth stocks", "tech stocks", "magnificent seven", "big tech",
+                    "mega cap", "faang", "market leaders", "blue chip"]
 
-async def fetch_real_news(ticker: str, max_articles: int = 5) -> List[Dict[str, Any]]:
-    """
-    Fetch real-time financial news for a given ticker from multiple sources.
-    """
-    
-    @retry_async(max_retries=2, base_delay=0.5, exceptions=(Exception,))
-    async def _fetch_yfinance_news() -> List[Dict[str, Any]]:
-        """Fetch news from Yahoo Finance via yfinance with retry logic"""
-        def _get_yf_news():
-            try:
-                logger.debug(f"Fetching news for {ticker} from Yahoo Finance")
-                stock = yf.Ticker(ticker)
-                news = getattr(stock, 'news', [])
-                
-                if not news:
-                    logger.warning(f"No news articles found for {ticker}")
-                    return []
-                
-                # Extract the nested content structure
-                processed_news = []
-                for article in news[:max_articles]:
-                    if isinstance(article, dict) and 'content' in article:
-                        content = article['content']
-                        processed_article = {
-                            'title': content.get('title', ''),
-                            'summary': content.get('summary', content.get('description', '')),
-                            'link': content.get('canonicalUrl', {}).get('url', ''),
-                            'publisher': content.get('provider', {}).get('displayName', 'Yahoo Finance'),
-                            'providerPublishTime': content.get('pubDate', ''),
-                            'raw': article  # Keep original for debugging
-                        }
-                        processed_news.append(processed_article)
-                
-                logger.debug(f"Successfully fetched {len(processed_news)} news articles for {ticker}")
-                return processed_news
-                
-            except Exception as e:
-                logger.error(f"Failed to fetch news for {ticker}: {e}")
-                raise  # Re-raise for retry logic
-        
-        return await asyncio.to_thread(_get_yf_news)
-    
-    async def _fetch_google_news() -> List[Dict[str, Any]]:
-        """Fetch news from Google Finance RSS (no API key required)"""
-        try:
-            # Extract base ticker symbol without exchange suffix
-            base_ticker = ticker.split('.')[0]
-            
-            # Google Finance RSS URL
-            url = f"https://news.google.com/rss/search?q={base_ticker}+stock&hl=en-US&gl=US&ceid=US:en"
-            
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url)
-                if response.status_code == 200:
-                    # Parse RSS feed (simplified parsing)
-                    import xml.etree.ElementTree as ET
-                    root = ET.fromstring(response.content)
-                    
-                    articles = []
-                    for item in root.findall('.//item')[:3]:  # Limit to 3 articles
-                        title = item.find('title')
-                        link = item.find('link')
-                        pub_date = item.find('pubDate')
-                        description = item.find('description')
-                        
-                        if title is not None and title.text:
-                            articles.append({
-                                'title': title.text,
-                                'summary': description.text if description is not None else '',
-                                'link': link.text if link is not None else '',
-                                'publisher': 'Google News',
-                                'providerPublishTime': pub_date.text if pub_date is not None else '',
-                                'raw': {'source': 'google_news'}
-                            })
-                    
-                    logger.debug(f"Google News found {len(articles)} articles for {ticker}")
-                    return articles
-                    
-            return []
-        except Exception as e:
-            logger.debug(f"Google News fetch failed for {ticker}: {e}")
-            return []
-    
-    async def _fetch_alpha_vantage_news() -> List[Dict[str, Any]]:
-        """Fetch news from Alpha Vantage (free tier available)"""
-        try:
-            # Note: Alpha Vantage requires API key for production use
-            # For now, return empty to avoid API key requirement
-            return []
-        except Exception:
-            return []
-    
-    async def _fetch_indian_stock_news() -> List[Dict[str, Any]]:
-        """Fetch news from Indian financial sources for .NS tickers"""
-        try:
-            if not ticker.endswith('.NS'):
-                return []
-            
-            # Extract base ticker for Indian stocks
-            base_ticker = ticker.replace('.NS', '')
-            
-            # Try Economic Times and MoneyControl RSS feeds
-            sources = [
-                f"https://economictimes.indiatimes.com/markets/stocks/rss",
-                f"https://www.moneycontrol.com/rss/latestnews.xml"
-            ]
-            
-            articles = []
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                for source_url in sources:
-                    try:
-                        response = await client.get(source_url)
-                        if response.status_code == 200:
-                            # Simple RSS parsing for Indian financial news
-                            import xml.etree.ElementTree as ET
-                            root = ET.fromstring(response.content)
-                            
-                            for item in root.findall('.//item')[:2]:  # Limit to 2 per source
-                                title = item.find('title')
-                                link = item.find('link') 
-                                description = item.find('description')
-                                pub_date = item.find('pubDate')
-                                
-                                if title is not None and title.text:
-                                    # Filter for relevant stock content
-                                    title_text = title.text.lower()
-                                    if any(keyword in title_text for keyword in [base_ticker.lower(), 'stock', 'share', 'market']):
-                                        articles.append({
-                                            'title': title.text,
-                                            'summary': description.text if description is not None else '',
-                                            'link': link.text if link is not None else '',
-                                            'publisher': 'Indian Financial News',
-                                            'providerPublishTime': pub_date.text if pub_date is not None else '',
-                                            'raw': {'source': 'indian_financial'}
-                                        })
-                                        
-                    except Exception as e:
-                        logger.debug(f"Failed to fetch from {source_url}: {e}")
-                        continue
-            
-            logger.debug(f"Indian financial sources found {len(articles)} articles for {ticker}")
-            return articles
-            
-        except Exception as e:
-            logger.debug(f"Indian financial news fetch failed for {ticker}: {e}")
-            return []
-    
-    # Multi-source news fetching strategy
-    all_articles = []
-    
-    # Primary source: Yahoo Finance
+
+# ---------- individual source fetchers ----------
+
+@retry_async(max_retries=2, base_delay=0.5, exceptions=(Exception,))
+async def _yf_news(ticker: str, max_articles: int) -> List[Dict]:
+    def _fetch():
+        stock = yf.Ticker(ticker)
+        out = []
+        for art in (getattr(stock, "news", []) or [])[:max_articles]:
+            if isinstance(art, dict) and "content" in art:
+                c = art["content"]
+                out.append({
+                    "title":               c.get("title", ""),
+                    "summary":             c.get("summary", c.get("description", "")),
+                    "link":                c.get("canonicalUrl", {}).get("url", ""),
+                    "publisher":           c.get("provider", {}).get("displayName", "Yahoo Finance"),
+                    "providerPublishTime": c.get("pubDate", ""),
+                })
+        return out
+
+    return await asyncio.to_thread(_fetch)
+
+
+async def _rss_news(url: str, source_label: str, max_items: int = 3) -> List[Dict]:
+    """Generic RSS parser returning article dicts."""
     try:
-        yf_articles = await _fetch_yfinance_news()
-        all_articles.extend(yf_articles)
-        logger.debug(f"Yahoo Finance provided {len(yf_articles)} articles for {ticker}")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url)
+            if r.status_code != 200:
+                return []
+        root = ET.fromstring(r.content)
+        arts = []
+        for item in root.findall(".//item")[:max_items]:
+            t = item.findtext("title", "")
+            if t:
+                arts.append({
+                    "title":               t,
+                    "summary":             item.findtext("description", ""),
+                    "link":                item.findtext("link", ""),
+                    "publisher":           source_label,
+                    "providerPublishTime": item.findtext("pubDate", ""),
+                })
+        return arts
     except Exception as e:
-        logger.debug(f"Yahoo Finance failed for {ticker}: {e}")
-    
-    # If we need more articles, try additional sources
-    if len(all_articles) < 3:
-        # For Indian stocks, try Indian financial sources
-        if ticker.endswith('.NS'):
-            try:
-                indian_articles = await _fetch_indian_stock_news()
-                all_articles.extend(indian_articles)
-                logger.debug(f"Indian sources provided {len(indian_articles)} articles for {ticker}")
-            except Exception as e:
-                logger.debug(f"Indian financial sources failed for {ticker}: {e}")
-        
-        # Try Google News as fallback
-        if len(all_articles) < 2:
-            try:
-                google_articles = await _fetch_google_news()
-                all_articles.extend(google_articles)
-                logger.debug(f"Google News provided {len(google_articles)} articles for {ticker}")
-            except Exception as e:
-                logger.debug(f"Google News failed for {ticker}: {e}")
-    
-    # Remove duplicates based on title similarity
-    articles = _deduplicate_articles(all_articles)
-    
-    # Log final results
-    if not articles:
-        logger.info(f"No news articles found for {ticker} from any source")
-    elif len(articles) < 3:
-        logger.debug(f"Found {len(articles)} articles for {ticker}, could benefit from additional sources")
-    else:
-        logger.debug(f"Successfully found {len(articles)} articles for {ticker}")
-    
-    # Standardize article format and filter for ticker relevance
-    standardized_articles = []
-    filtered_out = 0
-    
-    for article in articles:
-        try:
-            standardized_article = {
-                'title': article.get('title', ''),
-                'summary': article.get('summary', ''),
-                'url': article.get('link', ''),
-                'source': article.get('publisher', 'Yahoo Finance'),
-                'published_at': _parse_timestamp(article.get('providerPublishTime')),
-                'raw': article  # Keep original for debugging
-            }
-            
-            # Only include articles with meaningful content and ticker relevance
-            if (standardized_article['title'] and 
-                len(standardized_article['title']) > 10 and
-                _is_ticker_relevant(standardized_article, ticker)):
-                standardized_articles.append(standardized_article)
-            else:
-                filtered_out += 1
-                logger.debug(f"Filtered out irrelevant article for {ticker}: {standardized_article['title']}")
-                
-        except Exception:
+        logger.debug(f"RSS fetch failed ({url}): {e}")
+        return []
+
+
+async def _google_news(ticker: str) -> List[Dict]:
+    base = ticker.split(".")[0]
+    return await _rss_news(
+        f"https://news.google.com/rss/search?q={base}+stock&hl=en-US&gl=US&ceid=US:en",
+        "Google News",
+    )
+
+
+async def _indian_news(ticker: str) -> List[Dict]:
+    if not ticker.endswith(".NS"):
+        return []
+    base = ticker.replace(".NS", "")
+    arts = []
+    for url, label in [
+        ("https://economictimes.indiatimes.com/markets/stocks/rss", "Economic Times"),
+        ("https://www.moneycontrol.com/rss/latestnews.xml",         "MoneyControl"),
+    ]:
+        for a in await _rss_news(url, label, max_items=2):
+            text = f"{a['title']} {a['summary']}".lower()
+            if any(kw in text for kw in [base.lower(), "stock", "share", "market"]):
+                arts.append(a)
+    return arts
+
+
+# ---------- de-duplicate & relevance filter ----------
+
+def _deduplicate(articles: List[Dict]) -> List[Dict]:
+    seen, unique = set(), []
+    for a in articles:
+        title = a.get("title", "").lower().strip()
+        if not title or title in seen:
             continue
-    
-    logger.info(f"Filtered news for {ticker}: {len(standardized_articles)} relevant, {filtered_out} filtered out")
-    return standardized_articles[:max_articles]
+        title_words = set(title.split())
+        if any(len(title_words & set(s.split())) / max(len(title_words), len(set(s.split()))) > 0.7 for s in seen):
+            continue
+        seen.add(title)
+        unique.append(a)
+    return unique
 
 
-def _is_ticker_relevant(article: Dict[str, Any], ticker: str) -> bool:
-    """
-    Check if an article is relevant to the specific ticker.
-    Business logic: For major stocks, be more inclusive to capture relevant market sentiment.
-    """
-    title = article.get('title', '').lower()
-    summary = article.get('summary', '').lower()
-    
-    # Get company name and common references for major tickers
-    ticker_base = ticker.split('.')[0].upper()  # Remove .NS, .L suffixes
-    
-    # Common ticker mappings to company names
-    ticker_keywords = {
-        'AAPL': ['apple', 'iphone', 'ipad', 'mac', 'tim cook', 'cupertino'],
-        'MSFT': ['microsoft', 'windows', 'azure', 'office', 'satya nadella'],
-        'GOOGL': ['google', 'alphabet', 'search', 'android', 'youtube', 'pichai'],
-        'AMZN': ['amazon', 'aws', 'prime', 'bezos', 'andy jassy'],
-        'TSLA': ['tesla', 'elon musk', 'electric vehicle', 'model', 'cybertruck'],
-        'META': ['meta', 'facebook', 'instagram', 'whatsapp', 'mark zuckerberg'],
-        'NVDA': ['nvidia', 'gpu', 'ai chip', 'jensen huang', 'graphics'],
-        'NFLX': ['netflix', 'streaming', 'reed hastings'],
-        'RELIANCE': ['reliance', 'jio', 'mukesh ambani', 'ril'],
-    }
-    
-    # Major stocks that are commonly included in market discussions
-    major_tickers = {'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX'}
-    
-    # Get keywords for this ticker
-    keywords = ticker_keywords.get(ticker_base, [ticker_base.lower()])
-    keywords.append(ticker_base.lower())  # Always include the ticker itself
-    
-    # Check if any keyword appears in title or summary
-    text_to_check = f"{title} {summary}"
-    
-    # Direct ticker mention is strongest signal
-    if ticker_base.lower() in text_to_check:
+def _is_relevant(article: Dict, ticker: str) -> bool:
+    base = ticker.split(".")[0].upper()
+    text = f"{article.get('title','')} {article.get('summary','')}".lower()
+    keywords = _TICKER_KEYWORDS.get(base, []) + [base.lower()]
+    if any(kw in text for kw in keywords):
         return True
-    
-    # Check for company-specific keywords
-    keyword_matches = sum(1 for keyword in keywords if keyword in text_to_check)
-    
-    if keyword_matches > 0:
-        return True
-    
-    # For major stocks, be more inclusive - they're often discussed in broader market context
-    if ticker_base in major_tickers:
-        # Tech/growth stock related terms likely include major tech stocks
-        inclusive_terms = [
-            'growth stocks', 'tech stocks', 'magnificent seven', 'titans', 'top stocks',
-            'leading stocks', 'mega cap', 'big tech', 'faang', 'technology sector',
-            'growth companies', 'top performers', 'market leaders', 'blue chip'
-        ]
-        
-        inclusive_matches = sum(1 for term in inclusive_terms if term in text_to_check)
-        
-        if inclusive_matches > 0:
-            # Still filter out clearly irrelevant news (specific to other companies)
-            exclusion_terms = [
-                'intel corp', 'trump intel', 'altman openai', 'unitedhealth berkshire',
-                'applied materials', 'quantum computing specific'
-            ]
-            
-            exclusion_matches = sum(1 for term in exclusion_terms if term in text_to_check)
-            
-            if exclusion_matches == 0:
-                return True
-    
+    if base in _MAJOR_TICKERS:
+        return any(t in text for t in _INCLUSIVE_TERMS)
     return False
 
 
-def _deduplicate_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove duplicate articles based on title similarity"""
-    if not articles:
-        return []
-    
-    unique_articles = []
-    seen_titles = set()
-    
-    for article in articles:
-        title = article.get('title', '').lower().strip()
-        if title and title not in seen_titles:
-            # Check for similar titles (simple similarity check)
-            is_duplicate = False
-            for seen_title in seen_titles:
-                # Simple similarity: if titles share >70% of words, consider duplicate
-                title_words = set(title.split())
-                seen_words = set(seen_title.split())
-                if len(title_words & seen_words) / max(len(title_words), len(seen_words)) > 0.7:
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                unique_articles.append(article)
-                seen_titles.add(title)
-    
-    return unique_articles
-
-
-def _parse_timestamp(timestamp: Optional[Any]) -> str:
-    """Convert timestamp (Unix int or ISO string) to readable date"""
+def _parse_ts(ts: Any) -> str:
     try:
-        if timestamp:
-            # Handle both Unix timestamp (int) and ISO string formats
-            if isinstance(timestamp, int):
-                dt = datetime.fromtimestamp(timestamp)
-            elif isinstance(timestamp, str):
-                # Parse ISO format like "2025-06-09T20:06:19Z"
-                if 'T' in timestamp:
-                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                else:
-                    dt = datetime.fromisoformat(timestamp)
-            else:
-                return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            return dt.strftime('%Y-%m-%d %H:%M:%S')
-        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if isinstance(ts, int):
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(ts, str) and ts:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        pass
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-async def get_news_headlines_and_summaries(ticker: str, max_articles: int = 5) -> tuple[List[str], str]:
+# ---------- public API ----------
+
+async def fetch_real_news(ticker: str, max_articles: int = 5) -> List[Dict[str, Any]]:
     """
-    Get news headlines and a combined summary for sentiment analysis.
-    Returns: (headlines_list, combined_summary)
+    Fetch, de-duplicate, and relevance-filter news for a ticker.
+    Falls back progressively: Yahoo Finance → Indian RSS → Google News.
     """
+    raw: List[Dict] = []
+
+    try:
+        raw += await _yf_news(ticker, max_articles)
+    except Exception as e:
+        logger.debug(f"YF news failed for {ticker}: {e}")
+
+    if len(raw) < 3:
+        if ticker.endswith(".NS"):
+            raw += await _indian_news(ticker)
+        if len(raw) < 2:
+            raw += await _google_news(ticker)
+
+    arts = _deduplicate(raw)
+    standardized, skipped = [], 0
+    for a in arts:
+        s = {
+            "title":        a.get("title", ""),
+            "summary":      a.get("summary", ""),
+            "url":          a.get("link", ""),
+            "source":       a.get("publisher", "Yahoo Finance"),
+            "published_at": _parse_ts(a.get("providerPublishTime")),
+            "raw":          a,
+        }
+        if len(s["title"]) > 10 and _is_relevant(s, ticker):
+            standardized.append(s)
+        else:
+            skipped += 1
+
+    logger.info(f"News for {ticker}: {len(standardized)} relevant, {skipped} filtered")
+    return standardized[:max_articles]
+
+
+async def get_news_headlines_and_summaries(ticker: str, max_articles: int = 5
+                                           ) -> Tuple[List[str], str]:
+    """Return (headlines, combined_summary_text) for sentiment analysis."""
     articles = await fetch_real_news(ticker, max_articles)
-    
     if not articles:
-        # Fallback: return a neutral message instead of generating fake news
-        fallback_headline = f"Limited news coverage available for {ticker} at this time."
-        return [fallback_headline], fallback_headline
-    
-    # Extract headlines and summaries
-    headlines = []
-    summaries = []
-    
-    for article in articles:
-        if article['title']:
-            headlines.append(article['title'])
-        
-        if article['summary']:
-            # Limit summary length to avoid overwhelming the LLM
-            summary = article['summary'][:500] + "..." if len(article['summary']) > 500 else article['summary']
-            summaries.append(summary)
-    
-    # Combine summaries into a coherent text for analysis
-    combined_text = " ".join(summaries) if summaries else " ".join(headlines)
-    
-    return headlines, combined_text
+        fallback = f"Limited news coverage available for {ticker}."
+        return [fallback], fallback
+
+    headlines = [a["title"] for a in articles if a["title"]]
+    summaries = [a["summary"][:500] + ("..." if len(a["summary"]) > 500 else "")
+                 for a in articles if a["summary"]]
+    combined  = " ".join(summaries or headlines)
+    return headlines, combined
 
 
 async def get_recent_news_summary(ticker: str) -> Dict[str, Any]:
-    """
-    Get a structured summary of recent news for a ticker.
-    """
+    """Return structured recent-news metadata."""
     articles = await fetch_real_news(ticker)
-    
     if not articles:
-        return {
-            'summary': f"No recent news available for {ticker}",
-            'article_count': 0,
-            'latest_date': None,
-            'sources': [],
-            'articles': []
-        }
-    
-    # Get unique sources
-    sources = list(set(article['source'] for article in articles if article['source']))
-    
-    # Get latest article date
-    latest_date = None
-    if articles:
-        try:
-            latest_date = articles[0]['published_at']  # Assuming sorted by recency
-        except Exception:
-            latest_date = datetime.now().strftime('%Y-%m-%d')
-    
-    # Create summary
-    headlines = [article['title'] for article in articles if article['title']]
-    summary_text = f"Recent news for {ticker}: " + "; ".join(headlines[:3])
+        return {"summary": f"No recent news for {ticker}", "article_count": 0,
+                "latest_date": None, "sources": [], "articles": []}
+
+    headlines = [a["title"] for a in articles if a["title"]]
+    summary   = f"Recent news for {ticker}: " + "; ".join(headlines[:3])
     if len(headlines) > 3:
-        summary_text += f" and {len(headlines) - 3} more articles"
-    
+        summary += f" and {len(headlines)-3} more"
+
     return {
-        'summary': summary_text,
-        'article_count': len(articles),
-        'latest_date': latest_date,
-        'sources': sources,
-        'articles': articles[:3]  # Return top 3 for display
+        "summary":       summary,
+        "article_count": len(articles),
+        "latest_date":   articles[0]["published_at"] if articles else None,
+        "sources":       list({a["source"] for a in articles}),
+        "articles":      articles[:3],
     }

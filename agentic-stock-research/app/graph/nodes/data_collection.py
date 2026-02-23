@@ -12,96 +12,68 @@ from app.utils.async_utils import AsyncProcessor, monitor_performance
 logger = logging.getLogger(__name__)
 
 
+def _safe_float(row, col: str, default: float = 0.0) -> float:
+    try:
+        val = row.get(col, default) if hasattr(row, "get") else getattr(row, col, default)
+        return float(val.iloc[0] if hasattr(val, "iloc") else val)
+    except (AttributeError, IndexError, TypeError):
+        return default
+
+
 @monitor_performance("data_collection")
 async def data_collection_node(state: ResearchState, settings: AppSettings) -> ResearchState:
-    """
-    Optimized data collection with parallel fetching
-    """
     tickers = state["tickers"]
     if not tickers:
         state["raw_data"] = {}
         state.setdefault("confidences", {})["data_collection"] = 0.0
         return state
-    
-    logger.debug(f"Collecting data for {len(tickers)} tickers in parallel")
-    
-    async def fetch_ticker_data(ticker: str) -> tuple[str, dict]:
-        """Fetch both OHLCV and info data for a single ticker"""
-        try:
-            # Fetch OHLCV and info data in parallel for each ticker
-            ohlcv_task = fetch_ohlcv(ticker)
-            info_task = fetch_info(ticker)
-            
-            ohlcv_df, info = await asyncio.gather(ohlcv_task, info_task, return_exceptions=True)
-            
-            # Handle OHLCV data
-            ohlcv_summary = {}
-            if not isinstance(ohlcv_df, Exception) and hasattr(ohlcv_df, 'empty') and not ohlcv_df.empty:
-                last = ohlcv_df.iloc[-1]
-                
-                # Safe extraction from pandas Series
-                def safe_float_from_series(series_row, column_name, default=0.0):
-                    try:
-                        if hasattr(series_row, column_name):
-                            value = series_row.get(column_name, default)
-                            return float(value.iloc[0] if hasattr(value, 'iloc') else value)
-                        # else:
-                        #     value = series_row.get(column_name, default)
-                        #     return float(value.iloc[0] if hasattr(value, 'iloc') else value)
-                    except (AttributeError, IndexError, TypeError):
-                        return default
 
+    ticker = tickers[0]
+
+    async def fetch_ticker_data(t: str):
+        try:
+            ohlcv_df, info = await asyncio.gather(
+                fetch_ohlcv(t), fetch_info(t), return_exceptions=True
+            )
+            ohlcv_summary = {}
+            if not isinstance(ohlcv_df, Exception) and hasattr(ohlcv_df, "empty") and not ohlcv_df.empty:
+                last = ohlcv_df.iloc[-1]
                 ohlcv_summary = {
-                    "last_close": safe_float_from_series(last, "Close", 0.0),
-                    "last_volume": safe_float_from_series(last, "Volume", 0.0),
+                    "last_close": _safe_float(last, "Close"),
+                    "last_volume": _safe_float(last, "Volume"),
                     "rows": int(len(ohlcv_df)),
                 }
-            elif isinstance(ohlcv_df, Exception):
-                logger.warning(f"Failed to fetch OHLCV for {ticker}: {ohlcv_df}")
-            
-            # Handle info data
             if isinstance(info, Exception):
-                logger.warning(f"Failed to fetch info for {ticker}: {info}")
                 info = {}
-            
-            return ticker, {"ohlcv_summary": ohlcv_summary, "info": info}
-            
+            return t, {"ohlcv_summary": ohlcv_summary, "info": info}
         except Exception as e:
-            logger.error(f"Error fetching data for {ticker}: {e}")
-            return ticker, {"ohlcv_summary": {}, "info": {}}
-    
-    # Use AsyncProcessor for controlled parallel execution with higher concurrency
-    async with AsyncProcessor(max_workers=10) as processor:  # Increased from 5 to 10
-        # Fetch all ticker data in parallel with concurrency control
-        fetch_tasks = [fetch_ticker_data(ticker) for ticker in tickers]
+            logger.error(f"[{t}] Error fetching data: {e}")
+            return t, {"ohlcv_summary": {}, "info": {}}
+
+    async with AsyncProcessor(max_workers=15) as processor:
         results = await processor.gather_with_concurrency(
-            *fetch_tasks,
-            return_exceptions=True,
-            timeout=30.0  # Reduced from 60 to 30 seconds for faster failure detection
+            *[fetch_ticker_data(t) for t in tickers],
+            return_exceptions=True, timeout=20.0
         )
-    
-    # Process results
+
     raw_data: Dict[str, dict] = {}
-    successful_fetches = 0
-    
+    successful = 0
     for result in results:
         if isinstance(result, Exception):
-            logger.error(f"Failed to process ticker data: {result}")
+            logger.error(f"[{ticker}] Failed ticker fetch: {result}")
             continue
-        
         if isinstance(result, tuple) and len(result) == 2:
-            ticker, data = result
-            raw_data[ticker] = data
-            successful_fetches += 1
-        else:
-            logger.warning(f"Invalid result format: {result}")
-    
-    # Calculate confidence based on success rate
-    confidence = successful_fetches / len(tickers) if tickers else 0.0
-    
-    state["raw_data"] = raw_data
-    state.setdefault("confidences", {})["data_collection"] = confidence
-    
-    logger.info(f"Data collection completed: {successful_fetches}/{len(tickers)} successful")
-    
+            result_ticker, data = result
+            if result_ticker != ticker:
+                logger.error(f"[{ticker}] Ticker mismatch: got {result_ticker}, rejecting")
+                continue
+            raw_data[result_ticker] = data
+            successful += 1
+
+    if ticker in raw_data:
+        state["raw_data"] = {ticker: raw_data[ticker]}
+    else:
+        state["raw_data"] = {ticker: {}}
+
+    state.setdefault("confidences", {})["data_collection"] = successful / len(tickers) if tickers else 0.0
     return state

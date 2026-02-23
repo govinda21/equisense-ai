@@ -187,7 +187,7 @@ export function TechnicalChart({ labels, closes, indicators, signals }: Technica
           padding: 12,
           font: {
             size: 12,
-            weight: '500',
+            weight: 500 as any,
           },
           filter: (legendItem: any) => {
             // Only show legend for main indicators
@@ -206,7 +206,7 @@ export function TechnicalChart({ labels, closes, indicators, signals }: Technica
         padding: 12,
         titleFont: {
           size: 13,
-          weight: '600',
+          weight: 600 as any,
         },
         bodyFont: {
           size: 12,
@@ -248,7 +248,7 @@ export function TechnicalChart({ labels, closes, indicators, signals }: Technica
             size: 11,
             color: '#64748b',
           },
-          callback: function(value: any, index: number) {
+          callback: function(_value: any, index: number) {
             const label = labels[index]
             if (label) {
               return new Date(label).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
