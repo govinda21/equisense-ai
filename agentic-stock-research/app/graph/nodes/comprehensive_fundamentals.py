@@ -104,10 +104,11 @@ async def comprehensive_fundamentals_node(state: ResearchState, settings: AppSet
     # Resolve current price from state
     current_price: Optional[float] = None
     tech_data = state.get("analysis", {}).get("technicals", {})
-    current_price = (tech_data.get("currentPrice") or tech_data.get("current_price") or
-                     tech_data.get("details", {}).get("indicators", {}).get("last_close"))
+    if not tech_data:
+        current_price = (tech_data.get("currentPrice") or tech_data.get("current_price") or
+                        tech_data.get("details", {}).get("indicators", {}).get("last_close"))
 
-    logger.info(f"Fetched currentPrice from tech_data of {ticker}: {current_price}")
+        logger.info(f"tech_data of {ticker}: {tech_data}, so fetched current_price: {current_price}")
 
     if not current_price:
         raw = state.get("raw_data", {})

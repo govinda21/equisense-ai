@@ -19,14 +19,14 @@ function formatAmountByCurrency(value?: number, ticker?: string): string {
     const abs = Math.abs(v)
     if (abs >= 1e7) return `₹${(v / 1e7).toFixed(1)} Cr`
     if (abs >= 1e5) return `₹${(v / 1e5).toFixed(1)} L`
-    return `₹${v.toLocaleString()}`
+    return `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
   }
   // Default (USD-like) B/M formatting
   const abs = Math.abs(v)
   if (abs >= 1e12) return `${symbol}${(v / 1e12).toFixed(1)}T`
   if (abs >= 1e9) return `${symbol}${(v / 1e9).toFixed(1)}B`
   if (abs >= 1e6) return `${symbol}${(v / 1e6).toFixed(1)}M`
-  return `${symbol}${v.toLocaleString()}`
+  return `${symbol}${v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
 }
 
 function formatBuyZone(low?: number, high?: number, ticker?: string): string {
@@ -182,15 +182,18 @@ export function ResultSummaryGrid({ report }: { report: any }) {
       {/* 1. PRIMARY RECOMMENDATION - Full Width */}
       <div className="card p-4 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0 mb-4">
-          <h2 className="text-xl sm:text-2xl font-bold text-slate-900">Investment Recommendation</h2>
+          <h2 className="text-xl sm:text-2xl font-bold" style={{ color: "#0f172a", backgroundImage: "none", WebkitTextFillColor: "#0f172a" }}>Investment Recommendation</h2>
           <div className="flex items-center space-x-2 sm:space-x-4">
             <button
               onClick={async () => {
                 try {
+                  // Fast path: send the already-computed report data so the
+                  // backend can render the PDF immediately without re-running
+                  // the full analysis graph from scratch.
                   const response = await fetch('/api/generate-pdf', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tickers: [report?.ticker] })
+                    body: JSON.stringify({ report_data: report })
                   });
                   if (response.ok) {
                     const blob = await response.blob();
@@ -305,7 +308,7 @@ export function ResultSummaryGrid({ report }: { report: any }) {
 
         {/* Investment Recommendation - Enterprise Layout */}
         <div className="card p-6 shadow-lg">
-          <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-2">
+          <h3 className="text-lg font-bold mb-4 flex items-center gap-2" style={{ color: "#0f172a", backgroundImage: "none", WebkitTextFillColor: "#0f172a" }}>
             <span className="w-5 h-5 inline-block">🎯</span>
             Investment Recommendation
           </h3>
@@ -313,110 +316,113 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {/* 1. Current Market Price */}
             {report?.analyst_recommendations?.details?.current_price && (
-              <div className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900 border-2 border-slate-200 dark:border-slate-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
-                <div className="text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wide mb-2">Current Price</div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-slate-50 font-mono">
+              <div className="flex flex-col justify-center bg-white border-2 border-slate-200 rounded-xl p-5 text-center shadow-sm hover:shadow-md transition-shadow min-h-[120px]">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-3">Current Price</div>
+                <div className="text-2xl font-bold text-slate-900 font-mono tracking-tight">
                   {formatAmountByCurrency(report.analyst_recommendations.details.current_price, ticker)}
                 </div>
+                <div className="text-xs text-slate-400 mt-2">Live market price</div>
               </div>
             )}
 
             {/* 2. Price Target */}
             {report?.decision?.price_target_12m && (
-              <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/30 dark:to-emerald-900/30 border-2 border-green-300 dark:border-green-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
-                <div className="text-xs font-semibold text-green-700 dark:text-green-400 uppercase tracking-wide mb-2">Price Target</div>
-                <div className="text-2xl font-bold text-green-900 dark:text-green-100 font-mono mb-1">
+              <div className="flex flex-col justify-center bg-emerald-50 border-2 border-emerald-300 rounded-xl p-5 text-center shadow-sm hover:shadow-md transition-shadow min-h-[120px]">
+                <div className="text-xs font-semibold text-emerald-700 uppercase tracking-widest mb-3">Price Target</div>
+                <div className="text-2xl font-bold text-emerald-800 font-mono tracking-tight mb-1">
                   {formatAmountByCurrency(report.decision.price_target_12m, ticker)}
                 </div>
-                <div className="text-xs text-green-600 dark:text-green-400 font-medium">{report.decision.price_target_source}</div>
+                <div className="text-xs text-emerald-600 font-medium">{report.decision.price_target_source}</div>
               </div>
             )}
             
             {/* 3. Expected Return */}
-            <div className="bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/30 dark:to-cyan-900/30 border-2 border-blue-300 dark:border-blue-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
-              <div className="text-xs font-semibold text-blue-700 dark:text-blue-400 uppercase tracking-wide mb-2">Expected Return</div>
-              <div className={`text-2xl font-bold font-mono ${
-                (report.decision.expected_return_pct || 0) > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+            <div className="flex flex-col justify-center bg-blue-50 border-2 border-blue-300 rounded-xl p-5 text-center shadow-sm hover:shadow-md transition-shadow min-h-[120px]">
+              <div className="text-xs font-semibold text-blue-700 uppercase tracking-widest mb-3">Expected Return</div>
+              <div className={`text-2xl font-bold font-mono tracking-tight ${
+                (report.decision.expected_return_pct || 0) > 0 ? 'text-blue-700' : 'text-red-600'
               }`}>
                 {report.decision.expected_return_pct > 0 ? '+' : ''}{report.decision.expected_return_pct?.toFixed(1) || '0.0'}%
               </div>
-              <div className="text-xs text-slate-600 dark:text-slate-400 mt-1">12-month forecast</div>
+              <div className="text-xs text-blue-500 mt-2">12-month forecast</div>
             </div>
 
             {/* 4. DCF Summary */}
-            <div className="bg-gradient-to-br from-purple-50 to-violet-50 dark:from-purple-900/30 dark:to-violet-900/30 border-2 border-purple-300 dark:border-purple-700 rounded-xl p-5 text-center shadow-md hover:shadow-lg transition-shadow">
-              <div className="text-xs font-semibold text-purple-700 dark:text-purple-400 uppercase tracking-wide mb-2">DCF Valuation</div>
+            <div className="flex flex-col justify-center bg-purple-50 border-2 border-purple-300 rounded-xl p-5 text-center shadow-sm hover:shadow-md transition-shadow min-h-[120px]">
+              <div className="text-xs font-semibold text-purple-700 uppercase tracking-widest mb-3">DCF Valuation</div>
               {dcfValuation?.dcf_applicable === false ? (
                 <div>
-                  <div className="text-sm text-amber-600 dark:text-amber-400 font-medium mb-1">⚠️ Not Applicable</div>
-                  <div className="text-xs text-slate-600 dark:text-slate-400">{dcfValuation.reason}</div>
+                  <div className="text-sm text-purple-700 font-semibold mb-1">⚠️ Not Applicable</div>
+                  <div className="text-xs text-purple-500 leading-snug">{dcfValuation.reason}</div>
                 </div>
               ) : dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 ? (
                 <div>
-                  {/* Show base scenario value */}
                   {(() => {
                     const baseScenario = dcfValuation.scenario_results.find((s: any) => s.scenario === 'Base');
                     return baseScenario ? (
                       <>
-                        <div className="text-lg font-bold text-purple-900 dark:text-purple-100 font-mono mb-1">
+                        <div className="text-2xl font-bold text-purple-800 font-mono tracking-tight mb-1">
                           {formatAmountByCurrency(baseScenario.result.intrinsic_value_per_share, ticker)}
                         </div>
-                        <div className="text-xs text-slate-600 dark:text-slate-400">Base case scenario</div>
+                        <div className="text-xs text-purple-500">Base case scenario</div>
                       </>
                     ) : (
-                      <div className="text-sm text-slate-500 dark:text-slate-400">Available</div>
+                      <div className="text-sm text-purple-400">Available</div>
                     );
                   })()}
                 </div>
               ) : (
-                <div className="text-sm text-slate-500 dark:text-slate-400">Not available</div>
+                <div className="text-sm text-purple-400">Not available</div>
               )}
             </div>
           </div>
 
           {/* DCF Warnings (if any) - Below the cards */}
           {dcfValuation?.sanity_check?.warnings?.length > 0 && (
-            <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
-              <div className="text-sm font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-2">
-                <span className="w-4 h-4 inline-block">⚠️</span>
-                Valuation Model Warnings
+            <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+              <div className="text-sm font-semibold text-amber-900 mb-2 flex items-center gap-2">
+                <span>⚠️</span>
+                <span>Valuation Model Warnings</span>
               </div>
-              <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
+              <ul className="space-y-1">
                 {dcfValuation.sanity_check.warnings.map((warning: string, i: number) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <span className="text-amber-600 dark:text-amber-400">•</span>
+                  <li key={i} className="flex items-start gap-2 text-xs text-amber-800">
+                    <span className="text-amber-500 mt-0.5 shrink-0">•</span>
                     <span>{warning}</span>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
           )}
         </div>
 
         {/* Detailed DCF Scenarios - Separate Section */}
         {dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 && (
-          <div className="card p-6">
-            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-4">DCF Scenario Analysis</h3>
-            <div className="space-y-3">
-              {dcfValuation.scenario_results.map((scenario: any, index: number) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
-                  <div className="flex items-center gap-3">
-                    <span className={`w-12 text-center font-bold text-sm rounded px-2 py-1 ${
-                      scenario.scenario === 'Bull' ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' : 
-                      scenario.scenario === 'Base' ? 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200' : 
-                      'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
-                    }`}>
-                      {scenario.scenario}
-                    </span>
-                    <span className="text-sm text-slate-600 dark:text-slate-400">
-                      {(scenario.probability * 100).toFixed(0)}% probability
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+            <h3 className="text-base font-bold text-slate-800 mb-4 tracking-tight">DCF Scenario Analysis</h3>
+            <div className="space-y-2">
+              {dcfValuation.scenario_results.map((scenario: any, index: number) => {
+                const isBull = scenario.scenario === 'Bull'
+                const isBear = scenario.scenario === 'Bear'
+                const rowBg = isBull ? 'bg-emerald-50 border-emerald-200' : isBear ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'
+                const badgeCls = isBull ? 'bg-emerald-700 text-white' : isBear ? 'bg-red-700 text-white' : 'bg-blue-700 text-white'
+                const valueCls = isBull ? 'text-emerald-800' : isBear ? 'text-red-800' : 'text-blue-800'
+                return (
+                  <div key={index} className={`flex items-center justify-between px-4 py-3 rounded-xl border ${rowBg}`}>
+                    <div className="flex items-center gap-3">
+                      <span className={`w-12 text-center font-bold text-xs rounded-md px-2 py-1 ${badgeCls}`}>
+                        {scenario.scenario}
+                      </span>
+                      <span className="text-sm text-slate-600 font-medium">
+                        {(scenario.probability * 100).toFixed(0)}% probability
+                      </span>
+                    </div>
+                    <span className={`font-mono font-bold text-lg ${valueCls}`}>
+                      {formatAmountByCurrency(scenario.result.intrinsic_value_per_share, ticker)}
                     </span>
                   </div>
-                  <span className="font-mono font-bold text-lg text-slate-900 dark:text-slate-100">
-                    {formatAmountByCurrency(scenario.result.intrinsic_value_per_share, ticker)}
-                  </span>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}

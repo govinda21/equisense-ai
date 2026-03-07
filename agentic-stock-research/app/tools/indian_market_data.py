@@ -141,12 +141,12 @@ class IndianMarketDataProvider:
             logger.info(f"Fetching shareholding pattern for {symbol} using yfinance")
             
             # Use yfinance for basic company info
+            _exchange = (exchange or "NSE").upper()  # resolve once, outside the closure
             def _fetch_shareholding():
-                exchange = (exchange or "").upper()
                 if symbol.endswith((".NS", ".BO")):
                     ticker_symbol = symbol
-                elif exchange in {"NSE", "BSE"}:
-                    suffix = ".NS" if exchange == "NSE" else ".BO"
+                elif _exchange in {"NSE", "BSE"}:
+                    suffix = ".NS" if _exchange == "NSE" else ".BO"
                     ticker_symbol = f"{symbol}{suffix}"
                 else:
                     ticker_symbol = symbol
@@ -231,12 +231,12 @@ class IndianMarketDataProvider:
             # Use yfinance for corporate actions
             import yfinance as yf
             
+            _exchange = (exchange or "NSE").upper()  # resolve once, outside the closure
             def _fetch_corporate_actions():
-                exchange = (exchange or "").upper()
                 if symbol.endswith((".NS", ".BO")):
                     ticker_symbol = symbol
-                elif exchange in {"NSE", "BSE"}:
-                    suffix = ".NS" if exchange == "NSE" else ".BO"
+                elif _exchange in {"NSE", "BSE"}:
+                    suffix = ".NS" if _exchange == "NSE" else ".BO"
                     ticker_symbol = f"{symbol}{suffix}"
                 else:
                     ticker_symbol = symbol
@@ -350,12 +350,12 @@ class IndianMarketDataProvider:
             # Use yfinance for financial data
             import yfinance as yf
             
+            _exchange = (exchange or "NSE").upper()  # resolve once, outside the closure
             def _fetch_financial_filings():
-                exchange = (exchange or "").upper()
                 if symbol.endswith((".NS", ".BO")):
                     ticker_symbol = symbol
-                elif exchange in {"NSE", "BSE"}:
-                    suffix = ".NS" if exchange == "NSE" else ".BO"
+                elif _exchange in {"NSE", "BSE"}:
+                    suffix = ".NS" if _exchange == "NSE" else ".BO"
                     ticker_symbol = f"{symbol}{suffix}"
                 else:
                     ticker_symbol = symbol

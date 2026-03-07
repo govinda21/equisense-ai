@@ -298,21 +298,24 @@ class DCFValuationEngine:
 
         # Project FCFs using revenue-driven model
         explicit_fcf = []
-        projected_revenue = current_revenue
+        prev_revenue = current_revenue
 
         for year, growth in enumerate(inputs.revenue_growth_rates):
-            projected_revenue *= (1 + growth)
+            new_revenue = prev_revenue * (1 + growth)
+            delta_revenue = new_revenue - prev_revenue
 
-            ebitda = projected_revenue * inputs.ebitda_margins[min(year, len(inputs.ebitda_margins) - 1)]
-            depreciation = projected_revenue * inputs.depreciation_pct_revenue
+            ebitda = new_revenue * inputs.ebitda_margins[min(year, len(inputs.ebitda_margins) - 1)]
+            depreciation = new_revenue * inputs.depreciation_pct_revenue
             ebit = ebitda - depreciation
             nopat = ebit * (1 - inputs.tax_rate)
 
-            capex = projected_revenue * inputs.capex_pct_revenue
-            change_wc = projected_revenue * inputs.working_capital_pct_revenue * growth
+            capex = new_revenue * inputs.capex_pct_revenue
+            change_wc = delta_revenue * inputs.working_capital_pct_revenue
 
             fcf = nopat + depreciation - capex - change_wc
             explicit_fcf.append(fcf)
+
+            prev_revenue = new_revenue
 
         tv_methods = self._terminal_value_methods(explicit_fcf[-1], inputs, wacc)
         terminal_value = tv_methods[inputs.terminal_value_method]
@@ -436,6 +439,17 @@ class DCFValuationEngine:
             return {"error": "Unable to fetch company data"}
 
         info = company_data["info"]
+        # 🔴 Skip FCFF DCF for financial companies
+        sector = (info.get("sector") or "").lower()
+        if any(x in sector for x in ["financial", "bank", "nbfc", "insurance"]):
+            logger.warning(f"DCF skipped for financial company {ticker}")
+            return {
+                "ticker": ticker,
+                "dcf_applicable": False,
+                "reason": "FCFF DCF model not suitable for financial companies",
+                "valuation_method": "Use P/B, ROE-based valuation instead",
+                "current_price": current_price,
+            }
         validation = self._validate_applicability(info)
         if not validation["dcf_applicable"]:
             logger.warning(f"DCF skipped for {ticker}: {validation['reason']}")

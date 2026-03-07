@@ -15,7 +15,7 @@ _CAPEX_KEYS = ["Capital Expenditures", "Capital Expenditure", "Capex",
 _INDUSTRY_PE = {
     "Technology": {"pe": 22.0, "pb": 4.5, "ev_ebitda": 15.0},
     "Healthcare": {"pe": 18.0, "pb": 3.2, "ev_ebitda": 12.0},
-    "Financial Services": {"pe": 12.0, "pb": 1.2, "ev_ebitda": 8.0},
+    "Financial Services": {"pe": 18.0, "pb": 2.5, "ev_ebitda": None},
     "Consumer Cyclical": {"pe": 16.0, "pb": 2.8, "ev_ebitda": 10.0},
     "Consumer Defensive": {"pe": 15.0, "pb": 2.5, "ev_ebitda": 9.0},
     "Energy": {"pe": 12.0, "pb": 1.8, "ev_ebitda": 6.0},
@@ -26,6 +26,19 @@ _INDUSTRY_PE = {
 }
 _DEFAULT_MULTIPLES = {"pe": 16.0, "pb": 2.5, "ev_ebitda": 10.0}
 
+
+def _comps_banking(ticker, info, price):
+    # For Kotak (P/B ~3.0x), compare against HDFC (P/B ~2.8x) or ICICI (P/B ~3.2x)
+    current_pb = info.get("priceToBook", 0)
+    target_pb = _INDUSTRY_PE["Financial Services"]["pb"]
+    
+    fair_price = (target_pb / current_pb) * price if current_pb else 0
+    return {
+        "metric": "P/B Ratio",
+        "current": current_pb,
+        "peer_avg": target_pb,
+        "implied_value": fair_price
+    }
 
 def _f(x: Any) -> Optional[float]:
     try:
@@ -184,6 +197,38 @@ def _consolidate(valuations: Dict[str, Any], price: Optional[float]) -> Dict[str
     }
 
 
+def _excess_returns_valuation(info: Dict, r: float, tg: float) -> Dict:
+    """Valuation for banks: Book Value + PV of future Excess Returns."""
+    try:
+        # Get Key Banking Metrics
+        bvps = info.get("bookValue", 0)
+        roe = info.get("returnOnEquity", 0)
+        price = info.get("currentPrice", 1)
+        
+        if not bvps or not roe:
+            return {"applicable": False, "reason": "Missing Banking Metrics"}
+
+        # 1. Calculate Excess Return (ROE - Cost of Equity)
+        # Cost of Equity (r) should be ~12-14% for Indian Banks
+        excess_return_rate = roe - r
+        
+        # 2. Terminal Value of Excess Returns
+        # Formula: (BVPS * (ROE - r)) / (r - terminal_growth)
+        terminal_value_excess = (bvps * excess_return_rate) / (r - tg)
+        
+        intrinsic_value = bvps + terminal_value_excess
+        upside = (intrinsic_value / price) - 1
+
+        return {
+            "applicable": True,
+            "method": "Excess Returns (Residual Income)",
+            "intrinsic_value": round(intrinsic_value, 2),
+            "upside_potential": f"{round(upside * 100, 2)}%",
+            "inputs": {"ROE": roe, "BVPS": bvps, "Cost of Equity": r}
+        }
+    except Exception as e:
+        return {"applicable": False, "error": str(e)}
+
 async def compute_valuation(ticker: str) -> Dict[str, Any]:
     """Enhanced multi-model valuation: DCF, DDM, Comparables, sensitivity analysis."""
     def _run() -> Dict[str, Any]:
@@ -199,17 +244,26 @@ async def compute_valuation(ticker: str) -> Dict[str, Any]:
             tg = 0.025
 
             valuations: Dict[str, Any] = {}
-            try:
-                from app.tools.dcf_valuation import perform_dcf_valuation
-                dcf_result = asyncio.run(perform_dcf_valuation(ticker))
-                if dcf_result:
-                    valuations["dcf"] = {"applicable": True,
-                                         "base_case": {"intrinsic_price": {"base": dcf_result.get("intrinsic_value")}},
-                                         "methodology": "Enhanced DCF"}
-                else:
+            industry = info.get("industry", "")
+            sector = info.get("sector", "")
+            # Check for Banking/Financials
+            if "Bank" in industry or sector == "Financial Services":
+                # Banks use Excess Returns because FCF is not a reliable metric for them
+                valuations["excess_returns"] = _excess_returns_valuation(info, r, tg)
+                # Banks are valued on P/BV, not EV/EBITDA
+                valuations["comparables"] = _comps_banking(ticker, info, price)
+            else:
+                try:
+                    from app.tools.dcf_valuation import perform_dcf_valuation
+                    dcf_result = asyncio.run(perform_dcf_valuation(ticker))
+                    if dcf_result:
+                        valuations["dcf"] = {"applicable": True,
+                                            "base_case": {"intrinsic_price": {"base": dcf_result.get("intrinsic_value")}},
+                                            "methodology": "Enhanced DCF"}
+                    else:
+                        valuations["dcf"] = _dcf_analysis(fcf0, g, r, tg, shares, mkt_cap, price)
+                except Exception:
                     valuations["dcf"] = _dcf_analysis(fcf0, g, r, tg, shares, mkt_cap, price)
-            except Exception:
-                valuations["dcf"] = _dcf_analysis(fcf0, g, r, tg, shares, mkt_cap, price)
 
             ddm = _ddm(info, r)
             if ddm.get("applicable"):

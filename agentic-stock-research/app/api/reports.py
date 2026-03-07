@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import io
 
-from app.reporting.pdf_generator import ReportBuilder, get_report_generator
+from app.reporting.pdf_generator import PDFReportGenerator, get_report_generator
 from app.schemas.output import TickerReport
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ async def generate_report(request: ReportRequest, background_tasks: BackgroundTa
     """Generate a comprehensive PDF report for a ticker"""
     try:
         # Create report builder
-        builder = ReportBuilder()
+        builder = PDFReportGenerator()
         
         # Set metadata
         company_name = request.company_name or f"{request.ticker} Corporation"
@@ -182,7 +182,7 @@ async def download_report(report_id: str):
         # In a real implementation, you would store reports and retrieve them by ID
         # For now, we'll generate a sample report
         
-        builder = ReportBuilder()
+        builder = PDFReportGenerator()
         builder.set_metadata(
             ticker="SAMPLE",
             company_name="Sample Corporation",
