@@ -14,6 +14,16 @@ import pandas as pd
 from app.tools.fundamentals import compute_fundamentals
 from app.tools.dcf_valuation import perform_dcf_valuation
 from app.tools.governance_analysis import analyze_corporate_governance
+from app.tools.valuation import resolve_financial_inputs
+
+
+def _f(x: Any) -> Optional[float]:
+    """Safe float conversion with NaN guard — mirrors valuation.py._f."""
+    try:
+        v = float(x)
+        return None if v != v else v
+    except Exception:
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -247,53 +257,218 @@ class ComprehensiveScoringEngine:
             return _default_pillar(e)
 
     async def _score_valuation(self, ticker: str, current_price: Optional[float]) -> PillarScore:
+        """
+        Sector-aware valuation scoring.
+
+        Financial Services (banks, NBFCs, insurance):
+          - Primary model: Excess Returns (Residual Income) — BVPS + PV of excess returns
+          - DCF is NOT used — FCF includes deposit/loan flows for banks, making it meaningless
+          - Scored on: P/B vs peers (0-30 pts) + ROE vs cost of equity (0-30 pts) + P/E (0-25 pts) + PEG (0-15 pts)
+
+        All other sectors:
+          - Primary model: DCF with P/E / P/B / PEG comparables
+          - Scored on: DCF margin-of-safety (0-50 pts) + P/E (0-25 pts) + P/B (0-15 pts) + PEG (0-10 pts)
+        """
         try:
-            dcf = await perform_dcf_valuation(ticker, current_price)
+            import yfinance as yf
+
             f = await compute_fundamentals(ticker)
-            pe = f.get("pe", 0) or 0
-            pb = f.get("pb", 0) or 0
+            sector   = f.get("sector", "") or ""
+            industry = f.get("industry", "") or ""
+            pe  = f.get("pe",  0) or 0
+            pb  = f.get("pb",  0) or 0
             peg = f.get("peg", 0) or 0
 
-            # DCF score (0-50 pts) or P/E fallback
-            if "error" not in dcf and dcf.get("intrinsic_value"):
-                mos = dcf.get("margin_of_safety", 0)
-                dcf_pts = 50 if mos >= 0.3 else 40 if mos >= 0.2 else 30 if mos >= 0.1 else 20 if mos >= 0 else 10
-            else:
-                logger.warning(f"DCF failed for {ticker}, using P/E fallback")
-                dcf_pts = self._calculate_pe_fallback_score(f, current_price, ticker)
-
-            # P/E (0-25 pts)
-            pe_pts = (25 if pe <= 12 else 20 if pe <= 18 else 15 if pe <= 25 else 10 if pe <= 35 else 5) if pe > 0 else 12
-            # P/B (0-15 pts)
-            pb_pts = (15 if pb <= 1 else 12 if pb <= 2 else 8 if pb <= 3 else 5) if pb > 0 else 8
-            # PEG (0-10 pts)
-            peg_pts = (10 if peg <= 0.8 else 8 if peg <= 1.2 else 5 if peg <= 2 else 2) if peg > 0 else 5
-
-            pos, neg = [], []
-            if "error" not in dcf:
-                mos = dcf.get("margin_of_safety", 0)
-                if mos >= 0.2:
-                    pos.append(f"Strong margin of safety ({mos*100:.1f}%)")
-                elif mos < 0:
-                    neg.append(f"Trading above intrinsic value (MoS: {mos*100:.1f}%)")
-            if 0 < pe <= 15:
-                pos.append(f"Attractive P/E ratio ({pe:.1f})")
-            elif pe > 30:
-                neg.append(f"High P/E ratio ({pe:.1f})")
-            if 0 < pb <= 1.5:
-                pos.append(f"Reasonable P/B ratio ({pb:.1f})")
-            elif pb > 3:
-                neg.append(f"High P/B ratio ({pb:.1f})")
-
-            return PillarScore(
-                score=min(100.0, dcf_pts + pe_pts + pb_pts + peg_pts),
-                confidence=0.8 if "error" not in dcf else 0.6,
-                key_metrics={"intrinsic_value": dcf.get("intrinsic_value", 0),
-                             "margin_of_safety": dcf.get("margin_of_safety", 0),
-                             "pe_ratio": pe, "pb_ratio": pb, "peg_ratio": peg},
-                positive_factors=pos, negative_factors=neg,
-                data_quality="High" if "error" not in dcf else "Medium",
+            # Detect Financial Services: sector flag or industry keywords
+            is_financial = (
+                "Financial" in sector
+                or "Bank" in sector
+                or "bank" in industry.lower()
+                or "insurance" in industry.lower()
+                or "nbfc" in industry.lower()
             )
+
+            pos: List[str] = []
+            neg: List[str] = []
+
+            if is_financial:
+                # ── Financial Services path: Excess Returns (Residual Income) ────
+                # Do NOT call perform_dcf_valuation — it produces meaningless results for banks.
+                # Score on P/B vs peer benchmark, ROE vs cost of equity, and P/E.
+
+                try:
+                    info = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: yf.Ticker(ticker).info or {}
+                    )
+                except Exception:
+                    info = {}
+
+                price_used = current_price or _f(
+                    info.get("currentPrice") or info.get("regularMarketPrice")
+                )
+                beta = _f(info.get("beta")) or 1.0
+
+                # Cost of equity via CAPM (Indian G-Sec 7.0%, ERP 6.5%)
+                is_indian = ticker.upper().endswith(".NS") or ticker.upper().endswith(".BO")
+                rf  = 0.070 if is_indian else 0.045
+                ke  = max(0.08, min(0.18, rf + beta * 0.065))
+                tg  = 0.025
+
+                # Resolve BVPS and ROE through the shared, exhaustive derivation chain.
+                # This is the single place that handles all yfinance field inconsistencies —
+                # do not add fallback logic here; fix resolve_financial_inputs() instead.
+                fi   = resolve_financial_inputs(info, ticker, price_used)
+                roe  = fi["roe"]
+                bvps = fi["bvps"]
+
+                # Excess Returns intrinsic value
+                intrinsic_value = None
+                margin_of_safety = None
+                if roe is not None and bvps and bvps > 0 and ke > tg:
+                    excess_return = roe - ke
+                    tv = (bvps * excess_return) / (ke - tg)
+                    intrinsic_value = round(bvps + tv, 2)
+                    if price_used and price_used > 0:
+                        margin_of_safety = (intrinsic_value - price_used) / price_used
+
+                # P/B scoring (0-30 pts): P/B for private Indian banks, peer avg ~2.8x
+                # Low P/B relative to peers = undervalued = higher score
+                if is_indian and "Public" in (sector + industry):
+                    peer_pb = 1.2  # PSU banks
+                else:
+                    peer_pb = 2.8  # Private banks / generic financial
+                if pb > 0:
+                    pb_ratio_to_peer = pb / peer_pb
+                    pb_pts = (
+                        30 if pb_ratio_to_peer <= 0.8 else
+                        25 if pb_ratio_to_peer <= 1.0 else
+                        18 if pb_ratio_to_peer <= 1.3 else
+                        10 if pb_ratio_to_peer <= 1.6 else 5
+                    )
+                else:
+                    pb_pts = 15  # neutral if missing
+
+                # ROE vs Ke scoring (0-30 pts): excess return spread
+                if roe is not None:
+                    spread = roe - ke  # positive = value-creating
+                    roe_pts = (
+                        30 if spread >= 0.08 else
+                        25 if spread >= 0.05 else
+                        20 if spread >= 0.02 else
+                        12 if spread >= 0.00 else
+                        5   # value-destroying
+                    )
+                    if spread >= 0.05:
+                        pos.append(f"ROE ({roe*100:.1f}%) well above cost of equity ({ke*100:.1f}%)")
+                    elif spread < 0:
+                        neg.append(f"ROE ({roe*100:.1f}%) below cost of equity ({ke*100:.1f}%) — value-destroying")
+                else:
+                    roe_pts = 15
+
+                # P/E scoring (0-25 pts): peer avg for Indian private banks ~20x
+                peer_pe = 20.0 if is_indian else 15.0
+                if pe > 0:
+                    pe_ratio = pe / peer_pe
+                    pe_pts = (
+                        25 if pe_ratio <= 0.8 else
+                        20 if pe_ratio <= 1.0 else
+                        15 if pe_ratio <= 1.3 else
+                        8  if pe_ratio <= 1.6 else 4
+                    )
+                    if pe_ratio <= 0.9:
+                        pos.append(f"Attractive P/E vs peers ({pe:.1f}x vs peer avg {peer_pe:.0f}x)")
+                    elif pe_ratio > 1.4:
+                        neg.append(f"Premium P/E vs peers ({pe:.1f}x vs peer avg {peer_pe:.0f}x)")
+                else:
+                    pe_pts = 12
+
+                # PEG scoring (0-15 pts)
+                peg_pts = (15 if peg <= 0.8 else 12 if peg <= 1.2 else 8 if peg <= 2 else 3) if peg > 0 else 7
+
+                # Margin of safety commentary
+                if margin_of_safety is not None:
+                    if margin_of_safety >= 0.15:
+                        pos.append(f"Trading at discount to Excess Returns IV (MoS: {margin_of_safety*100:.1f}%)")
+                    elif margin_of_safety < -0.10:
+                        neg.append(f"Trading above Excess Returns IV (premium: {-margin_of_safety*100:.1f}%)")
+
+                if 0 < pb <= 1.5:
+                    pos.append(f"Reasonable P/B ratio for financials ({pb:.1f}x)")
+                elif pb > 4:
+                    neg.append(f"High P/B ratio ({pb:.1f}x) — expensive vs book")
+
+                total_score = min(100.0, pb_pts + roe_pts + pe_pts + peg_pts)
+                # Confidence reflects whether inputs came directly or were derived
+                direct_inputs = (fi["bvps_source"] == "bookValue" and
+                                 fi["roe_source"] == "returnOnEquity")
+                return PillarScore(
+                    score=total_score,
+                    confidence=0.75 if direct_inputs else (0.65 if (roe is not None and bvps) else 0.5),
+                    key_metrics={
+                        "intrinsic_value":   intrinsic_value or 0,
+                        "margin_of_safety":  margin_of_safety or 0,
+                        "pe_ratio":          pe,
+                        "pb_ratio":          pb,
+                        "peg_ratio":         peg,
+                        "roe":               round(roe * 100, 2) if roe is not None else 0,
+                        "cost_of_equity":    round(ke, 4),
+                        "bvps":              bvps or 0,
+                        "valuation_method":  "Excess Returns (Residual Income)",
+                        "bvps_source":       fi["bvps_source"],
+                        "roe_source":        fi["roe_source"],
+                    },
+                    positive_factors=pos,
+                    negative_factors=neg,
+                    data_quality="High" if direct_inputs else ("Medium" if (roe is not None and bvps) else "Low"),
+                )
+
+            else:
+                # ── Non-financial path: DCF + comparables ────────────────────
+                dcf = await perform_dcf_valuation(ticker, current_price)
+
+                # DCF score (0-50 pts) or P/E fallback
+                if "error" not in dcf and dcf.get("intrinsic_value"):
+                    mos = dcf.get("margin_of_safety", 0)
+                    dcf_pts = 50 if mos >= 0.3 else 40 if mos >= 0.2 else 30 if mos >= 0.1 else 20 if mos >= 0 else 10
+                else:
+                    logger.warning(f"DCF failed for {ticker}, using P/E fallback")
+                    dcf_pts = self._calculate_pe_fallback_score(f, current_price, ticker)
+
+                # P/E (0-25 pts)
+                pe_pts = (25 if pe <= 12 else 20 if pe <= 18 else 15 if pe <= 25 else 10 if pe <= 35 else 5) if pe > 0 else 12
+                # P/B (0-15 pts)
+                pb_pts = (15 if pb <= 1 else 12 if pb <= 2 else 8 if pb <= 3 else 5) if pb > 0 else 8
+                # PEG (0-10 pts)
+                peg_pts = (10 if peg <= 0.8 else 8 if peg <= 1.2 else 5 if peg <= 2 else 2) if peg > 0 else 5
+
+                if "error" not in dcf:
+                    mos = dcf.get("margin_of_safety", 0)
+                    if mos >= 0.2:
+                        pos.append(f"Strong margin of safety ({mos*100:.1f}%)")
+                    elif mos < 0:
+                        neg.append(f"Trading above intrinsic value (MoS: {mos*100:.1f}%)")
+                if 0 < pe <= 15:
+                    pos.append(f"Attractive P/E ratio ({pe:.1f})")
+                elif pe > 30:
+                    neg.append(f"High P/E ratio ({pe:.1f})")
+                if 0 < pb <= 1.5:
+                    pos.append(f"Reasonable P/B ratio ({pb:.1f})")
+                elif pb > 3:
+                    neg.append(f"High P/B ratio ({pb:.1f})")
+
+                return PillarScore(
+                    score=min(100.0, dcf_pts + pe_pts + pb_pts + peg_pts),
+                    confidence=0.8 if "error" not in dcf else 0.6,
+                    key_metrics={
+                        "intrinsic_value":  dcf.get("intrinsic_value", 0),
+                        "margin_of_safety": dcf.get("margin_of_safety", 0),
+                        "pe_ratio": pe, "pb_ratio": pb, "peg_ratio": peg,
+                        "valuation_method": "DCF",
+                    },
+                    positive_factors=pos, negative_factors=neg,
+                    data_quality="High" if "error" not in dcf else "Medium",
+                )
+
         except Exception as e:
             logger.error(f"Valuation scoring failed for {ticker}: {e}")
             return _default_pillar(e)
@@ -461,17 +636,38 @@ class ComprehensiveScoringEngine:
             logger.warning(f"Technical entry zone failed for {ticker}: {e}, using fallback")
             entry_zone, entry_explanation = await self._fallback_entry_zone(ticker, current_price, intrinsic_value)
 
-        # DCF target and stop loss
+        # Target price and stop loss
+        # For Financial Services stocks, perform_dcf_valuation() correctly returns
+        # dcf_applicable=False — in that case it has no buy_zone or target_price.
+        # We must not fall through and use current_price * 1.25 based on a stale/wrong price.
+        # Instead we derive target/stop-loss from the intrinsic_value already computed
+        # by _score_valuation (Excess Returns IV for banks, DCF IV for others).
         try:
             dcf = await perform_dcf_valuation(ticker, current_price)
-            if "error" not in dcf:
+            if "error" not in dcf and dcf.get("dcf_applicable", True) and dcf.get("target_price"):
                 target_price = dcf.get("target_price", 0)
                 stop_loss = dcf.get("stop_loss", 0)
+            elif intrinsic_value and intrinsic_value > 0 and current_price and current_price > 0:
+                # Use intrinsic value from scoring (Excess Returns for banks, DCF for others)
+                # Target = intrinsic value; stop-loss = 15% below current price
+                target_price = intrinsic_value
+                stop_loss = current_price * 0.85
+            elif current_price and current_price > 0:
+                target_price = current_price * 1.25
+                stop_loss = current_price * 0.85
             else:
-                raise ValueError("DCF error")
+                target_price = 0.0
+                stop_loss = 0.0
         except Exception:
-            target_price = current_price * 1.25 if current_price else 0.0
-            stop_loss = current_price * 0.85 if current_price else 0.0
+            if intrinsic_value and intrinsic_value > 0 and current_price and current_price > 0:
+                target_price = intrinsic_value
+                stop_loss = current_price * 0.85
+            elif current_price and current_price > 0:
+                target_price = current_price * 1.25
+                stop_loss = current_price * 0.85
+            else:
+                target_price = 0.0
+                stop_loss = 0.0
 
         time_horizon = 18 if overall_score >= 75 else 12 if overall_score >= 60 else 6
 
@@ -485,24 +681,46 @@ class ComprehensiveScoringEngine:
         }
 
     async def _fallback_entry_zone(self, ticker: str, current_price: Optional[float], intrinsic_value: float) -> tuple:
+        """
+        Compute a fallback entry zone when the technical entry zone calculation fails.
+
+        Priority order:
+          1. If intrinsic_value is valid AND within a credible range of current_price
+             (within 2× or above 50% of current price), use it to anchor the zone.
+          2. Otherwise anchor the zone to current_price directly.
+
+        We deliberately do NOT call perform_dcf_valuation() here for financial stocks
+        because it returns dcf_applicable=False with buy_zone=0, causing the zone to
+        collapse to the wrong price (the bug that produced entry zone 884–910 for
+        HDFCBANK when the price was 1857).
+        """
         try:
-            dcf = await perform_dcf_valuation(ticker, current_price)
-            if "error" not in dcf:
-                bz = dcf.get("buy_zone", 0)
-                if bz and bz > 0:
-                    return (bz * 0.95, bz * 1.05), f"Fallback: DCF-based entry zone around buy zone ₹{bz:.2f}"
-            if intrinsic_value > 0:
-                lo, hi = intrinsic_value * 0.8, intrinsic_value * 0.95
-                return (lo, hi), f"Fallback: Intrinsic value-based entry zone ₹{lo:.2f}-₹{hi:.2f}"
-            if current_price and current_price > 0:
-                lo, hi = current_price * 0.9, current_price * 1.05
-                return (lo, hi), f"Fallback: Conservative entry zone ₹{lo:.2f}-₹{hi:.2f}"
-            return (0.0, 0.0), "Insufficient data for entry zone calculation"
+            cp = current_price or 0.0
+            if cp <= 0:
+                return (0.0, 0.0), "Insufficient data for entry zone calculation"
+
+            # Use intrinsic value if it is plausible relative to current price
+            if intrinsic_value and intrinsic_value > 0:
+                ratio = intrinsic_value / cp
+                if 0.5 <= ratio <= 2.0:
+                    # IV is within a credible range — anchor zone around current price
+                    # discounted toward IV (or capped at current if IV > current)
+                    anchor = min(cp, intrinsic_value)
+                    lo = round(anchor * 0.95, 2)
+                    hi = round(anchor * 1.02, 2)
+                    label = "IV-anchored" if intrinsic_value < cp else "current price"
+                    return (lo, hi), f"Fallback: {label} entry zone ₹{lo:.2f}–₹{hi:.2f}"
+
+            # Default: ±5% band around current price
+            lo = round(cp * 0.95, 2)
+            hi = round(cp * 1.05, 2)
+            return (lo, hi), f"Fallback: ±5% band around current price ₹{lo:.2f}–₹{hi:.2f}"
         except Exception as e:
             logger.error(f"Fallback entry zone failed for {ticker}: {e}")
             if current_price and current_price > 0:
-                lo, hi = current_price * 0.9, current_price * 1.05
-                return (lo, hi), f"Emergency fallback: ₹{lo:.2f}-₹{hi:.2f}"
+                lo = round(current_price * 0.95, 2)
+                hi = round(current_price * 1.05, 2)
+                return (lo, hi), f"Emergency fallback: ₹{lo:.2f}–₹{hi:.2f}"
             return (0.0, 0.0), "Emergency fallback: No price data available"
 
     def _assess_risk_factors(self, pillar_scores: Dict[str, PillarScore]) -> Dict[str, Any]:

@@ -162,8 +162,54 @@ export function ResultSummaryGrid({ report }: { report: any }) {
   const comp = report?.comprehensive_fundamentals
   const deepFinancialAnalysis = report?.fundamentals?.details?.deep_financial_analysis
   const dcfValuation = report?.fundamentals?.details?.dcf_valuation
-  
-  // Available analysis sections (only show if data exists)
+
+  // ── Sector-aware valuation card ──────────────────────────────────────────
+  // The backend (valuation.py) sets `valuation.details.primary_model` to declare
+  // which model it actually used — "excess_returns" for Financial Services,
+  // "dcf" for everything else. The frontend reads this flag directly instead of
+  // re-inferring sector from ticker strings or hardcoded lists.
+  //
+  // Fallback chain (for older reports that predate the primary_model field):
+  //   1. valuation.details.primary_model  ← authoritative, set by valuation.py
+  //   2. excess_returns key present in valuation.details.models  ← structural signal
+  //   3. dcf_valuation.dcf_applicable === false AND reason mentions financial  ← legacy
+  const _primaryModel: string = (
+    report?.valuation?.details?.primary_model ||
+    (report?.valuation?.details?.models?.excess_returns ? 'excess_returns' : '') ||
+    (report?.fundamentals?.details?.dcf_valuation?.dcf_applicable === false ? 'excess_returns' : '') ||
+    'dcf'
+  )
+  const isFinancial: boolean = _primaryModel === 'excess_returns'
+
+  // Resolve the intrinsic value for whichever model ran
+  // For excess_returns: check models block first, then comprehensive_fundamentals, then recompute
+  // For dcf: read from dcf scenario results as before
+  const primaryIV: number | null = (() => {
+    if (isFinancial) {
+      const erIV = report?.valuation?.details?.models?.excess_returns?.intrinsic_value
+      if (erIV && erIV > 0) return erIV
+      const cfIV = report?.comprehensive_fundamentals?.intrinsic_value
+      if (cfIV && cfIV > 0) return cfIV
+      // Last resort: inline recompute from BVPS + ROE if available in fundamentals
+      const bvps: number | undefined = report?.valuation?.details?.inputs?.book_value_ps
+      const roe: number | undefined = report?.valuation?.details?.inputs?.return_on_equity
+      const ke: number | undefined = report?.valuation?.details?.inputs?.cost_of_equity
+      if (bvps && bvps > 0 && roe && ke && ke > 0.025) {
+        const iv = bvps + (bvps * (roe - ke)) / (ke - 0.025)
+        if (iv > 0) return Math.round(iv * 100) / 100
+      }
+      return null
+    } else {
+      // DCF path — same logic as before
+      if (dcfValuation?.scenario_results?.length > 0) {
+        const base = dcfValuation.scenario_results.find((s: any) => s.scenario === 'Base')
+        return base?.result?.intrinsic_value_per_share ?? null
+      }
+      return dcfValuation?.intrinsic_value ?? null
+    }
+  })()
+
+  // Available analysis sections (only show if data exists) (only show if data exists)
   const filings = report?.filings
   const earningsCall = report?.earnings_call_analysis
   const strategicConviction = report?.strategic_conviction
@@ -347,32 +393,24 @@ export function ResultSummaryGrid({ report }: { report: any }) {
               <div className="text-xs text-blue-500 mt-2">12-month forecast</div>
             </div>
 
-            {/* 4. DCF Summary */}
+            {/* 4. Valuation Model — driven by primary_model flag from backend */}
             <div className="flex flex-col justify-center bg-purple-50 border-2 border-purple-300 rounded-xl p-5 text-center shadow-sm hover:shadow-md transition-shadow min-h-[120px]">
-              <div className="text-xs font-semibold text-purple-700 uppercase tracking-widest mb-3">DCF Valuation</div>
-              {dcfValuation?.dcf_applicable === false ? (
-                <div>
-                  <div className="text-sm text-purple-700 font-semibold mb-1">⚠️ Not Applicable</div>
-                  <div className="text-xs text-purple-500 leading-snug">{dcfValuation.reason}</div>
-                </div>
-              ) : dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 ? (
-                <div>
-                  {(() => {
-                    const baseScenario = dcfValuation.scenario_results.find((s: any) => s.scenario === 'Base');
-                    return baseScenario ? (
-                      <>
-                        <div className="text-2xl font-bold text-purple-800 font-mono tracking-tight mb-1">
-                          {formatAmountByCurrency(baseScenario.result.intrinsic_value_per_share, ticker)}
-                        </div>
-                        <div className="text-xs text-purple-500">Base case scenario</div>
-                      </>
-                    ) : (
-                      <div className="text-sm text-purple-400">Available</div>
-                    );
-                  })()}
-                </div>
+              <div className="text-xs font-semibold text-purple-700 uppercase tracking-widest mb-3">
+                {isFinancial ? 'Excess Returns IV' : 'DCF Valuation'}
+              </div>
+              {primaryIV && primaryIV > 0 ? (
+                <>
+                  <div className="text-2xl font-bold text-purple-800 font-mono tracking-tight mb-1">
+                    {formatAmountByCurrency(primaryIV, ticker)}
+                  </div>
+                  <div className="text-xs text-purple-500">
+                    {isFinancial ? 'Residual Income Model' : 'Base case scenario'}
+                  </div>
+                </>
               ) : (
-                <div className="text-sm text-purple-400">Not available</div>
+                <div className="text-sm text-purple-400">
+                  {isFinancial ? 'Computing…' : 'Not available'}
+                </div>
               )}
             </div>
           </div>
@@ -396,8 +434,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           )}
         </div>
 
-        {/* Detailed DCF Scenarios - Separate Section */}
-        {dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 && (
+        {/* Detailed DCF Scenarios - only shown for non-financial stocks */}
+        {!isFinancial && dcfValuation?.scenario_results && dcfValuation.scenario_results.length > 0 && (
           <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
             <h3 className="text-base font-bold text-slate-800 mb-4 tracking-tight">DCF Scenario Analysis</h3>
             <div className="space-y-2">
@@ -1023,8 +1061,8 @@ export function ResultSummaryGrid({ report }: { report: any }) {
           </div>
       )}
 
-      {/* DCF Sensitivity Analysis */}
-      {dcfValuation?.sensitivity_analysis && (
+      {/* DCF Sensitivity Analysis — only for non-financial stocks */}
+      {!isFinancial && dcfValuation?.sensitivity_analysis && (
         <div className="card p-6">
           <h2 className="text-xl font-bold text-slate-900 mb-6">DCF Sensitivity Analysis</h2>
           
